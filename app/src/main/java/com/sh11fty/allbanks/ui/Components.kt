@@ -5,12 +5,10 @@ package com.sh11fty.allbanks.ui
 import android.content.Context
 import android.content.ContextWrapper
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +26,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,12 +36,11 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -59,6 +58,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -73,19 +73,6 @@ import java.util.Locale
 import kotlin.math.abs
 
 // ---------------------------------------------------------------- theme + formatting
-
-@Composable
-fun AppTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
-    val ctx = LocalContext.current
-    val scheme = when {
-        Build.VERSION.SDK_INT >= 31 && dark -> dynamicDarkColorScheme(ctx)
-        Build.VERSION.SDK_INT >= 31 -> dynamicLightColorScheme(ctx)
-        dark -> darkColorScheme()
-        else -> lightColorScheme()
-    }
-    MaterialTheme(colorScheme = scheme, content = content)
-}
 
 /** True when balances should be masked. */
 val LocalHide = compositionLocalOf { false }
@@ -135,15 +122,28 @@ fun categoryPath(c: CategoryEntity, byId: Map<Long, CategoryEntity>): String {
 
 // ---------------------------------------------------------------- small pieces
 
+/** Round monogram for a bank, tinted with its own hue. */
+@Composable
+fun BankAvatar(institution: String, size: Int = 40) {
+    val c = bankColour(institution)
+    Box(Modifier.size(size.dp).clip(CircleShape).background(c.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+        Text(
+            institution.firstOrNull()?.uppercase() ?: "?",
+            fontWeight = FontWeight.Bold, color = c, fontSize = (size * 0.4f).sp,
+        )
+    }
+}
+
 @Composable
 fun BankChip(institution: String) {
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(bankColour(institution))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(bankColour(institution).copy(alpha = 0.14f))
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(institution, color = Color.White, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.size(6.dp).clip(CircleShape).background(bankColour(institution)))
+        Spacer(Modifier.width(6.dp))
+        Text(institution, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -151,15 +151,20 @@ fun BankChip(institution: String) {
 fun Tag(text: String, colour: Color = MaterialTheme.colorScheme.secondaryContainer) {
     Box(
         Modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(colour)
-            .padding(horizontal = 6.dp, vertical = 1.dp)
-    ) { Text(text, fontSize = 11.sp, maxLines = 1) }
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+    ) { Text(text, style = MaterialTheme.typography.labelSmall, maxLines = 1) }
 }
 
+/** Quiet caption used above groups of content. */
 @Composable
 fun SectionLabel(text: String) {
-    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    Text(
+        text.lowercase().replaceFirstChar { it.uppercase() },
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -167,12 +172,54 @@ fun ColourDot(colour: Int, size: Int = 12) {
     Box(Modifier.size(size.dp).clip(CircleShape).background(Color(colour)))
 }
 
+/** Section title with an optional trailing action. */
+@Composable
+fun SectionHeader(title: String, action: String? = null, onAction: () -> Unit = {}) {
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+        if (action != null) {
+            Text(
+                action, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onAction).padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+@Composable
+fun EmptyState(title: String, body: String, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+    }
+}
+
+/** Filled pill search field. */
+@Composable
+fun SearchField(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier) {
+    TextField(
+        value = value, onValueChange = onChange, singleLine = true,
+        placeholder = { Text(hint, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+        shape = RoundedCornerShape(50),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+            disabledIndicatorColor = Color.Transparent,
+        ),
+        modifier = modifier.fillMaxWidth(),
+    )
+}
+
 @Composable
 fun LabelValue(label: String, value: String?) {
     if (value.isNullOrBlank()) return
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-        Text(label, Modifier.width(92.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, Modifier.weight(1f), fontSize = 13.sp)
+        Text(label, Modifier.width(96.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -323,15 +370,15 @@ fun TxnRow(t: TxnEntity, account: AccountEntity?, cat: CategoryEntity?, showBank
     val tint = if (t.transferId != null) MaterialTheme.colorScheme.tertiary else cat?.let { Color(it.colour) }
         ?: MaterialTheme.colorScheme.outline
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(40.dp).clip(CircleShape).background(tint.copy(alpha = 0.22f)), contentAlignment = Alignment.Center) {
-            Text(title.firstOrNull()?.uppercase() ?: "?", fontWeight = FontWeight.Bold, color = tint)
+        Box(Modifier.size(44.dp).clip(CircleShape).background(tint.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+            Text(title.firstOrNull()?.uppercase() ?: "?", fontWeight = FontWeight.Bold, color = tint, fontSize = 17.sp)
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
             val sub = listOfNotNull(
                 account?.institution?.takeIf { showBank },
                 when {
@@ -339,15 +386,15 @@ fun TxnRow(t: TxnEntity, account: AccountEntity?, cat: CategoryEntity?, showBank
                     cat != null -> cat.name
                     else -> "Uncategorised"
                 },
-                if (!t.note.isNullOrBlank()) "✎" else null,
+                if (!t.note.isNullOrBlank()) "Note" else null,
             ).joinToString(" · ")
-            Text(sub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(sub, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.width(8.dp))
         Text(
-            fmt(t.amountMinor, t.currency),
-            fontWeight = FontWeight.SemiBold,
-            color = if (t.amountMinor > 0) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface,
+            (if (t.amountMinor > 0) "+" else "") + fmt(t.amountMinor, t.currency),
+            style = MaterialTheme.typography.titleSmall,
+            color = if (t.amountMinor > 0) positiveColour() else MaterialTheme.colorScheme.onSurface,
         )
     }
 }
@@ -368,17 +415,17 @@ fun TxnList(
             stickyHeader(key = "h$date") {
                 val net = list.filter { it.transferId == null }.sumOf { it.amountMinor }
                 Row(
-                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f))
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(dayLabel(date), Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                    if (net != 0L) Text(fmt(net, list.first().currency), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(dayLabel(date), Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (net != 0L) Text(fmt(net, list.first().currency), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             items(list, key = { it.id }) { t ->
                 TxnRow(t, accounts[t.accountId], t.categoryId?.let(cats::get), showBank) { onClick(t) }
-                HorizontalDivider(Modifier.padding(start = 68.dp), thickness = 0.5.dp)
+                HorizontalDivider(Modifier.padding(start = 74.dp, end = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
     }
@@ -428,12 +475,4 @@ fun LineChart(values: List<Long>, modifier: Modifier = Modifier, colour: Color =
         drawPath(area, fill)
         drawPath(line, colour, style = Stroke(width = 4f, cap = StrokeCap.Round))
     }
-}
-
-@Composable
-fun SpacerH(dp: Int) = Spacer(Modifier.height(dp.dp))
-
-@Composable
-fun SimpleRowArrangement(content: @Composable () -> Unit) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { content() }
 }

@@ -18,12 +18,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -71,7 +69,7 @@ fun TxnSheet(t: TxnEntity, vm: MainVm, onDismiss: () -> Unit) {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(fmt(t.amountMinor, t.currency), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(fmt(t.amountMinor, t.currency), style = MaterialTheme.typography.titleLarge)
             }
 
             OutlinedCard(Modifier.fillMaxWidth()) {
@@ -171,20 +169,20 @@ fun ReviewScreen(vm: MainVm) {
     val laterCount = laterTransfers.size + laterTxns.size
 
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text("Review", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
+        item { Text("Review", style = MaterialTheme.typography.headlineSmall) }
 
-        item { SectionLabel("POSSIBLE INTERNAL TRANSFERS · ${pendingTransfers.size}") }
-        if (pendingTransfers.isEmpty()) item { Text("Nothing to confirm.", fontSize = 13.sp) }
+        item { SectionHeader("Possible internal transfers · ${pendingTransfers.size}") }
+        if (pendingTransfers.isEmpty()) item { Card(Modifier.fillMaxWidth()) { EmptyState("No transfers to confirm", "Matching pairs between your own accounts show up here.") } }
         items(pendingTransfers, key = { "c" + it.outId + it.inId }) { c ->
             TransferCard(c, byTxn[c.outId], byTxn[c.inId], acc, catById, vm, later = false)
         }
 
         item {
             Spacer(Modifier.height(8.dp))
-            SectionLabel("UNCATEGORISED · ${uncategorised.size}")
+            SectionHeader("Uncategorised · ${uncategorised.size}")
             Text("Open one to see everything and categorise it.", fontSize = 12.sp)
         }
-        if (uncategorised.isEmpty()) item { Text("All caught up.", fontSize = 13.sp) }
+        if (uncategorised.isEmpty()) item { Card(Modifier.fillMaxWidth()) { EmptyState("All caught up", "Every transaction has a category.") } }
         items(uncategorised.take(visible), key = { "u" + it.id }) { t ->
             UncategorisedCard(t, acc[t.accountId], vm, onOpen = { editing = t }, later = false)
         }
@@ -225,12 +223,12 @@ private fun TransferCard(
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(fmt(-out.amountMinor, out.currency), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(fmt(-out.amountMinor, out.currency), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                 Tag("${c.score}% match")
             }
-            Text("OUT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Tag("Out", MaterialTheme.colorScheme.errorContainer)
             TxnDetails(out, acc[out.accountId], out.categoryId?.let(catById::get)?.name)
-            Text("IN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Tag("In", MaterialTheme.colorScheme.primaryContainer)
             TxnDetails(into, acc[into.accountId], into.categoryId?.let(catById::get)?.name)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { vm.confirm(c) }) { Text("Link") }

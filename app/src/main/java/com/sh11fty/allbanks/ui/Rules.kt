@@ -18,7 +18,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -151,7 +150,7 @@ private fun RuleSheet(
             Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text(if (initial == null) "New rule" else "Edit rule", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(if (initial == null) "New rule" else "Edit rule", style = MaterialTheme.typography.titleLarge)
 
             SectionLabel("MATCH TEXT")
             OutlinedTextField(pattern, { pattern = it }, label = { Text("Text or regex") }, singleLine = true, modifier = Modifier.fillMaxWidth())

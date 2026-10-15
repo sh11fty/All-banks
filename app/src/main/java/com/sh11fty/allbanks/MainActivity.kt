@@ -10,7 +10,23 @@ import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +45,7 @@ class MainActivity : FragmentActivity() {
     private var stoppedAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         if ((application as AllBanksApp).prefs.getBoolean("blockScreenshots", false)) {
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
@@ -37,12 +54,22 @@ class MainActivity : FragmentActivity() {
             AppTheme {
                 if (locked) {
                     Column(
-                        Modifier.fillMaxSize(),
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(32.dp),
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text("All Banks is locked")
-                        Button(onClick = { authenticate() }) { Text("Unlock") }
+                        Box(
+                            Modifier.size(84.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Filled.Lock, null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
+                        Spacer(Modifier.height(24.dp))
+                        Text("All Banks", style = MaterialTheme.typography.headlineMedium)
+                        Spacer(Modifier.height(6.dp))
+                        Text("Locked to keep your finances private", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(32.dp))
+                        Button(onClick = { authenticate() }, modifier = Modifier.fillMaxWidth().widthIn(max = 320.dp).height(52.dp)) { Text("Unlock") }
                     }
                 } else {
                     val vm: MainVm = viewModel()
