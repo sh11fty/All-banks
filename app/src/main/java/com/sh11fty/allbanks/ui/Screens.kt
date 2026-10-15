@@ -29,13 +29,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -136,6 +144,7 @@ private enum class Tab(val label: String) {
 @Composable
 fun MainScaffold(vm: MainVm) {
     var tab by remember { mutableStateOf(Tab.Overview) }
+    var selectedAccount by remember { mutableStateOf<String?>(null) }
     val snack = remember { SnackbarHostState() }
     val message by vm.message.collectAsState()
     val pending by vm.candidates.collectAsState()
@@ -152,7 +161,7 @@ fun MainScaffold(vm: MainVm) {
                 Tab.values().forEach { t ->
                     NavigationBarItem(
                         selected = tab == t,
-                        onClick = { tab = t },
+                        onClick = { tab = t; selectedAccount = null },
                         icon = {},
                         label = {
                             Text(
@@ -167,8 +176,14 @@ fun MainScaffold(vm: MainVm) {
         },
     ) { pad ->
         Box(Modifier.padding(pad)) {
+            val sel = selectedAccount
+            if (sel != null && tab == Tab.Overview) {
+                BackHandler { selectedAccount = null }
+                AccountScreen(vm, sel) { selectedAccount = null }
+                return@Box
+            }
             when (tab) {
-                Tab.Overview -> OverviewScreen(vm)
+                Tab.Overview -> OverviewScreen(vm) { selectedAccount = it }
                 Tab.Transactions -> TransactionsScreen(vm)
                 Tab.Review -> ReviewScreen(vm)
                 Tab.Rules -> RulesScreen(vm)
@@ -181,7 +196,7 @@ fun MainScaffold(vm: MainVm) {
 // ---------------------------------------------------------------- Overview
 
 @Composable
-fun OverviewScreen(vm: MainVm) {
+fun OverviewScreen(vm: MainVm, onOpenAccount: (String) -> Unit) {
     val accounts by vm.accounts.collectAsState()
     val txns by vm.txns.collectAsState()
     val cats by vm.categories.collectAsState()
@@ -228,7 +243,7 @@ fun OverviewScreen(vm: MainVm) {
                 }
             }
         }
-        items(accounts, key = { it.id }) { a -> AccountRow(a, vm) }
+        items(accounts, key = { it.id }) { a -> AccountRow(a, vm) { onOpenAccount(a.id) } }
         item {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
@@ -246,10 +261,10 @@ fun OverviewScreen(vm: MainVm) {
 }
 
 @Composable
-private fun AccountRow(a: AccountEntity, vm: MainVm) {
+private fun AccountRow(a: AccountEntity, vm: MainVm, onClick: () -> Unit) {
     val days = daysUntil(a.consentRenewalDue)
     val stale = a.connectionStatus in setOf("expired", "suspended", "error", "rejected")
-    Card(Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BankChip(a.institution)
@@ -269,6 +284,59 @@ private fun AccountRow(a: AccountEntity, vm: MainVm) {
             else if (days != null && days <= 10) Text("Reconnect within ${maxOf(days, 0)} days", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         }
     }
+}
+
+// ---------------------------------------------------------------- Account detail
+
+@Composable
+fun AccountScreen(vm: MainVm, accountId: String, onBack: () -> Unit) {
+    val txns by vm.txns.collectAsState()
+    val accounts by vm.accounts.collectAsState()
+    val cats by vm.categories.collectAsState()
+    var query by remember { mutableStateOf("") }
+    var editing by remember { mutableStateOf<TxnEntity?>(null) }
+    val account = accounts.firstOrNull { it.id == accountId }
+    val catById = cats.associateBy { it.id }
+    val shown = remember(txns, query, accountId) {
+        txns.filter { t ->
+            t.accountId == accountId &&
+                (query.isBlank() || listOfNotNull(t.description, t.counterparty, t.merchantName)
+                    .any { it.contains(query, ignoreCase = true) })
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("← Back") }
+            Spacer(Modifier.weight(1f))
+        }
+        if (account != null) {
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                BankChip(account.institution)
+                Spacer(Modifier.height(4.dp))
+                Text(account.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    account.balanceMinor?.let { fmt(it, account.currency) } ?: "—",
+                    style = MaterialTheme.typography.headlineMedium,
+                )
+                Text("${shown.size} transactions", fontSize = 12.sp)
+            }
+        }
+        OutlinedTextField(
+            query, { query = it }, label = { Text("Search this account") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        if (shown.isEmpty()) {
+            Text("No transactions to show.", Modifier.padding(16.dp))
+        }
+        LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            items(shown, key = { it.id }) { t ->
+                TxnRow(t, null, catById[t.categoryId]) { editing = t }
+                HorizontalDivider()
+            }
+        }
+    }
+    editing?.let { CategoriseSheet(it, vm) { editing = null } }
 }
 
 // ---------------------------------------------------------------- Transactions
@@ -313,7 +381,7 @@ fun TransactionsScreen(vm: MainVm) {
             }
         }
     }
-    editing?.let { CategoriseDialog(it, vm) { editing = null } }
+    editing?.let { CategoriseSheet(it, vm) { editing = null } }
 }
 
 @Composable
@@ -338,47 +406,88 @@ fun TxnRow(t: TxnEntity, account: AccountEntity?, cat: CategoryEntity?, onClick:
 }
 
 @Composable
-fun CategoriseDialog(t: TxnEntity, vm: MainVm, onDismiss: () -> Unit) {
+private fun SectionLabel(text: String) {
+    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+}
+
+@Composable
+private fun ColourDot(colour: Int, size: Int = 12) {
+    Box(Modifier.size(size.dp).clip(CircleShape).background(Color(colour)))
+}
+
+@Composable
+fun CategoriseSheet(t: TxnEntity, vm: MainVm, onDismiss: () -> Unit) {
     val cats by vm.categories.collectAsState()
     var newName by remember { mutableStateOf("") }
     var makeRule by remember { mutableStateOf(true) }
     var pattern by remember { mutableStateOf(t.merchantName ?: t.counterparty ?: t.description) }
-    val rulePattern = if (makeRule) pattern else null
+    val rulePattern = if (makeRule && pattern.isNotBlank()) pattern else null
+    val title = t.merchantName ?: t.counterparty ?: t.description
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-        title = { Text("Categorise") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(t.description, fontSize = 12.sp)
-                Spacer(Modifier.height(8.dp))
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(makeRule, { makeRule = it })
-                    Text("Also categorise future matches")
+                    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(fmt(t.amountMinor, t.currency), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
-                if (makeRule) {
-                    OutlinedTextField(pattern, { pattern = it }, label = { Text("Text to match") }, singleLine = true)
-                }
-                Spacer(Modifier.height(8.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    cats.forEach { c ->
-                        FilterChip(t.categoryId == c.id, {
-                            vm.categorise(t, c.id, rulePattern); onDismiss()
-                        }, label = { Text(c.name) })
+                Text(t.bookingDate + if (title != t.description) " · ${t.description}" else "", fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+
+            if (t.transferId != null) {
+                Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.tertiaryContainer) {
+                    Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Linked as an internal transfer", Modifier.weight(1f))
+                        OutlinedButton(onClick = { vm.unlink(t); onDismiss() }) { Text("Unlink") }
                     }
                 }
-                OutlinedTextField(newName, { newName = it }, label = { Text("New category") }, singleLine = true)
-                TextButton(
-                    onClick = { vm.categoriseNew(t, newName, rulePattern); onDismiss() },
-                    enabled = newName.isNotBlank(),
-                ) { Text("Create and apply") }
-                if (t.transferId != null) {
-                    OutlinedButton(onClick = { vm.unlink(t); onDismiss() }) { Text("Not an internal transfer") }
+            }
+
+            SectionLabel("CATEGORY")
+            if (cats.isEmpty()) Text("No categories yet — create one below.", fontSize = 13.sp)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                cats.forEach { c ->
+                    FilterChip(
+                        selected = t.categoryId == c.id,
+                        onClick = { vm.categorise(t, c.id, rulePattern); onDismiss() },
+                        label = { Text(c.name) },
+                        leadingIcon = { ColourDot(c.colour) },
+                    )
                 }
             }
-        },
-    )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    newName, { newName = it }, label = { Text("New category") }, singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                Button(
+                    onClick = { vm.categoriseNew(t, newName, rulePattern); onDismiss() },
+                    enabled = newName.isNotBlank(),
+                ) { Text("Add") }
+            }
+
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Remember for next time", fontWeight = FontWeight.Medium)
+                            Text("Auto-categorise matching transactions", fontSize = 12.sp)
+                        }
+                        Switch(makeRule, { makeRule = it })
+                    }
+                    if (makeRule) {
+                        OutlinedTextField(
+                            pattern, { pattern = it }, label = { Text("When the text contains") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------- Review
@@ -392,35 +501,58 @@ fun ReviewScreen(vm: MainVm) {
     var editing by remember { mutableStateOf<TxnEntity?>(null) }
     val byTxn = txns.associateBy { it.id }
     val acc = accounts.associateBy { it.id }
-    val uncategorised = txns.filter { it.categoryId == null && it.transferId == null }.take(30)
+    val catById = cats.associateBy { it.id }
+    val uncategorisedAll = txns.filter { it.categoryId == null && it.transferId == null }
+    val uncategorised = uncategorisedAll.take(30)
 
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text("Possible internal transfers (${candidates.size})", style = MaterialTheme.typography.titleMedium) }
-        if (candidates.isEmpty()) item { Text("Nothing to confirm.") }
+    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item {
+            Text("Review", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        }
+        item { SectionLabel("POSSIBLE INTERNAL TRANSFERS · ${candidates.size}") }
+        if (candidates.isEmpty()) item { Text("Nothing to confirm.", fontSize = 13.sp) }
         items(candidates, key = { it.outId + it.inId }) { c: CandidateEntity ->
             val o = byTxn[c.outId]; val i = byTxn[c.inId]
             if (o != null && i != null) {
                 Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("${fmt(-o.amountMinor, o.currency)}   confidence ${c.score}%")
-                        Text("Out: ${acc[o.accountId]?.institution} · ${o.bookingDate} · ${o.description}", fontSize = 12.sp, maxLines = 2)
-                        Text("In: ${acc[i.accountId]?.institution} · ${i.bookingDate} · ${i.description}", fontSize = 12.sp, maxLines = 2)
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(fmt(-o.amountMinor, o.currency), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Tag("${c.score}% match")
+                        }
+                        TransferLeg("OUT", acc[o.accountId]?.institution, o.bookingDate, o.description)
+                        TransferLeg("IN", acc[i.accountId]?.institution, i.bookingDate, i.description)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { vm.confirm(c) }) { Text("Link") }
-                            OutlinedButton(onClick = { vm.reject(c) }) { Text("Not a transfer") }
+                            Button(onClick = { vm.confirm(c) }, modifier = Modifier.weight(1f)) { Text("Link") }
+                            OutlinedButton(onClick = { vm.reject(c) }, modifier = Modifier.weight(1f)) { Text("Not a transfer") }
                         }
                     }
                 }
             }
         }
-        item { Spacer(Modifier.height(8.dp)); Text("Uncategorised", style = MaterialTheme.typography.titleMedium) }
-        val catById = cats.associateBy { it.id }
+        item {
+            Spacer(Modifier.height(8.dp))
+            SectionLabel("UNCATEGORISED · ${uncategorisedAll.size}")
+            Text("Tap a transaction to categorise it.", fontSize = 12.sp)
+        }
+        if (uncategorised.isEmpty()) item { Text("All caught up.", fontSize = 13.sp) }
         items(uncategorised, key = { "u" + it.id }) { t ->
             TxnRow(t, acc[t.accountId], catById[t.categoryId]) { editing = t }
             HorizontalDivider()
         }
     }
-    editing?.let { CategoriseDialog(it, vm) { editing = null } }
+    editing?.let { CategoriseSheet(it, vm) { editing = null } }
+}
+
+@Composable
+private fun TransferLeg(label: String, bank: String?, date: String, description: String) {
+    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Tag(label, MaterialTheme.colorScheme.surfaceVariant)
+        Column {
+            Text("${bank ?: "?"} · $date", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text(description, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }
 
 // ---------------------------------------------------------------- Rules
@@ -430,39 +562,50 @@ fun RulesScreen(vm: MainVm) {
     val rules by vm.rules.collectAsState()
     val cats by vm.categories.collectAsState()
     var adding by remember { mutableStateOf(false) }
-    val catName = cats.associate { it.id to it.name }
+    val catById = cats.associateBy { it.id }
 
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
+            Text("Rules", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("Top rule wins. Manually categorised transactions are never changed.", fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { adding = true }, enabled = cats.isNotEmpty()) { Text("Add rule") }
                 OutlinedButton(onClick = { vm.reapplyRules() }) { Text("Re-apply to history") }
             }
             if (cats.isEmpty()) Text("Categories appear after your first sync, or create one by categorising a transaction.", fontSize = 12.sp)
-            Text("Top rule wins. Manually categorised transactions are never changed.", fontSize = 12.sp)
         }
+        if (rules.isEmpty()) item { Text("No rules yet. Categorise a transaction and tick \"Remember for next time\", or add one here.", fontSize = 13.sp) }
         items(rules, key = { it.id }) { r ->
+            val cat = catById[r.categoryId]
             Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("${r.field} ${r.matchType} \"${r.pattern}\"")
-                        Text(
-                            "→ ${catName[r.categoryId] ?: "?"}" +
-                                when (r.direction) { 1 -> " · money in"; -1 -> " · money out"; else -> "" },
-                            fontSize = 12.sp,
-                        )
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("\"${r.pattern}\"", fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text("${r.field} ${r.matchType}", fontSize = 12.sp)
+                        }
+                        Switch(r.enabled, { vm.toggleRule(r) })
                     }
-                    Switch(r.enabled, { vm.toggleRule(r) })
-                    TextButton(onClick = { vm.deleteRule(r) }) { Text("Delete") }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("→", fontSize = 14.sp)
+                        if (cat != null) Tag(cat.name, Color(cat.colour).copy(alpha = 0.35f)) else Tag("missing category")
+                        when (r.direction) {
+                            1 -> Tag("money in")
+                            -1 -> Tag("money out")
+                        }
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { vm.deleteRule(r) }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    }
                 }
             }
         }
     }
-    if (adding) AddRuleDialog(vm, cats, rules) { adding = false }
+    if (adding) AddRuleSheet(vm, cats, rules) { adding = false }
 }
 
 @Composable
-private fun AddRuleDialog(vm: MainVm, cats: List<CategoryEntity>, rules: List<RuleEntity>, onDismiss: () -> Unit) {
+private fun AddRuleSheet(vm: MainVm, cats: List<CategoryEntity>, rules: List<RuleEntity>, onDismiss: () -> Unit) {
     var pattern by remember { mutableStateOf("") }
     var field by remember { mutableStateOf("description") }
     var match by remember { mutableStateOf("contains") }
@@ -473,54 +616,68 @@ private fun AddRuleDialog(vm: MainVm, cats: List<CategoryEntity>, rules: List<Ru
 
     fun pence(s: String) = s.toDoubleOrNull()?.let { Math.round(it * 100) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("New rule") },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        confirmButton = {
-            TextButton(enabled = pattern.isNotBlank(), onClick = {
-                vm.saveRule(
-                    RuleEntity(
-                        priority = (rules.minOfOrNull { it.priority } ?: 0) - 1,
-                        field = field, matchType = match, pattern = pattern.trim(),
-                        direction = direction, minAbsMinor = pence(min), maxAbsMinor = pence(max),
-                        categoryId = cat,
-                    )
-                )
-                onDismiss()
-            }) { Text("Save") }
-        },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(pattern, { pattern = it }, label = { Text("Text / regex") }, singleLine = true)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("description", "counterparty", "merchant").forEach {
-                        FilterChip(field == it, { field = it }, label = { Text(it) })
-                    }
-                }
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("contains", "equals", "regex").forEach {
-                        FilterChip(match == it, { match = it }, label = { Text(it) })
-                    }
-                }
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(direction == 0, { direction = 0 }, label = { Text("Any") })
-                    FilterChip(direction == 1, { direction = 1 }, label = { Text("Money in") })
-                    FilterChip(direction == -1, { direction = -1 }, label = { Text("Money out") })
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(min, { min = it }, label = { Text("Min £") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f))
-                    OutlinedTextField(max, { max = it }, label = { Text("Max £") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f))
-                }
-                Text("Category")
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    cats.forEach { FilterChip(cat == it.id, { cat = it.id }, label = { Text(it.name) }) }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("New rule", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+
+            SectionLabel("MATCH")
+            OutlinedTextField(pattern, { pattern = it }, label = { Text("Text or regex") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Text("Look in", fontSize = 12.sp)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("description", "counterparty", "merchant").forEach {
+                    FilterChip(field == it, { field = it }, label = { Text(it) })
                 }
             }
-        },
-    )
+            Text("How", fontSize = 12.sp)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("contains", "equals", "regex").forEach {
+                    FilterChip(match == it, { match = it }, label = { Text(it) })
+                }
+            }
+
+            SectionLabel("ONLY WHEN (OPTIONAL)")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(direction == 0, { direction = 0 }, label = { Text("Any direction") })
+                FilterChip(direction == 1, { direction = 1 }, label = { Text("Money in") })
+                FilterChip(direction == -1, { direction = -1 }, label = { Text("Money out") })
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(min, { min = it }, label = { Text("Min £") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f))
+                OutlinedTextField(max, { max = it }, label = { Text("Max £") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f))
+            }
+
+            SectionLabel("CATEGORISE AS")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                cats.forEach {
+                    FilterChip(cat == it.id, { cat = it.id }, label = { Text(it.name) }, leadingIcon = { ColourDot(it.colour) })
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("Cancel") }
+                Button(
+                    enabled = pattern.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        vm.saveRule(
+                            RuleEntity(
+                                priority = (rules.minOfOrNull { it.priority } ?: 0) - 1,
+                                field = field, matchType = match, pattern = pattern.trim(),
+                                direction = direction, minAbsMinor = pence(min), maxAbsMinor = pence(max),
+                                categoryId = cat,
+                            )
+                        )
+                        onDismiss()
+                    },
+                ) { Text("Save rule") }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------- Settings
