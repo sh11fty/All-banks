@@ -15,6 +15,8 @@ android {
     defaultConfig {
         applicationId = "com.sh11fty.allbanks"
         minSdk = 26
+        // Personal build for a modern phone: arm64 only keeps the APK small (SQLCipher ships native libs per ABI).
+        ndk { abiFilters += listOf("arm64-v8a") }
         targetSdk = 34
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
         versionName = (findProperty("versionName") as String?) ?: "1.0.0"
