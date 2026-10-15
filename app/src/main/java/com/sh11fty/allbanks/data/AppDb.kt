@@ -7,6 +7,8 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.RoomDatabase
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
@@ -58,6 +60,15 @@ interface AppDao {
     @Query("UPDATE transactions SET categoryId = :categoryId, categoryManual = :manual WHERE id = :id")
     suspend fun setCategory(id: String, categoryId: Long?, manual: Boolean)
 
+    @Query("UPDATE transactions SET reviewState = :state WHERE id = :id")
+    suspend fun setReviewState(id: String, state: Int)
+
+    @Query("UPDATE transactions SET note = :note WHERE id = :id")
+    suspend fun setNote(id: String, note: String?)
+
+    @Query("UPDATE transactions SET categoryId = :to WHERE categoryId = :from")
+    suspend fun reassignTxnCategory(from: Long, to: Long?)
+
     @Query("UPDATE transactions SET categoryId = :categoryId WHERE id = :id AND categoryManual = 0")
     suspend fun setAutoCategory(id: String, categoryId: Long?)
 
@@ -80,6 +91,31 @@ interface AppDao {
     @Query("DELETE FROM categories")
     suspend fun deleteAllCategories()
 
+    @Query("DELETE FROM categories WHERE id = :id")
+    suspend fun deleteCategory(id: Long)
+
+    @Query("UPDATE categories SET parentId = :to WHERE parentId = :from")
+    suspend fun reparentChildren(from: Long, to: Long?)
+
+    // budgets
+    @Query("SELECT * FROM budgets")
+    fun budgets(): Flow<List<BudgetEntity>>
+
+    @Query("SELECT * FROM budgets")
+    suspend fun budgetsOnce(): List<BudgetEntity>
+
+    @Upsert
+    suspend fun upsertBudget(item: BudgetEntity)
+
+    @Upsert
+    suspend fun upsertBudgets(items: List<BudgetEntity>)
+
+    @Query("DELETE FROM budgets WHERE categoryId = :categoryId")
+    suspend fun deleteBudget(categoryId: Long)
+
+    @Query("DELETE FROM budgets")
+    suspend fun deleteAllBudgets()
+
     // rules
     @Query("SELECT * FROM rules ORDER BY priority, id")
     fun rules(): Flow<List<RuleEntity>>
@@ -92,6 +128,9 @@ interface AppDao {
 
     @Upsert
     suspend fun upsertRules(items: List<RuleEntity>)
+
+    @Query("UPDATE rules SET categoryId = :to WHERE categoryId = :from")
+    suspend fun reassignRuleCategory(from: Long, to: Long)
 
     @Query("DELETE FROM rules WHERE id = :id")
     suspend fun deleteRule(id: Long)
@@ -106,8 +145,11 @@ interface AppDao {
     @Query("SELECT * FROM candidates WHERE rejected = 1")
     suspend fun rejectedOnce(): List<CandidateEntity>
 
-    @Query("DELETE FROM candidates WHERE rejected = 0")
+    @Query("DELETE FROM candidates WHERE rejected = 0 AND later = 0")
     suspend fun deletePendingCandidates()
+
+    @Query("UPDATE candidates SET later = :later WHERE outId = :outId AND inId = :inId")
+    suspend fun setCandidateLater(outId: String, inId: String, later: Boolean)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertCandidates(items: List<CandidateEntity>)
@@ -126,18 +168,30 @@ interface AppDao {
         CategoryEntity::class,
         RuleEntity::class,
         CandidateEntity::class,
+        BudgetEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): AppDao
 
     companion object {
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE categories ADD COLUMN parentId INTEGER")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN reviewState INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE candidates ADD COLUMN later INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE rules ADD COLUMN toAccountId TEXT")
+                db.execSQL("CREATE TABLE IF NOT EXISTS budgets (categoryId INTEGER NOT NULL, limitMinor INTEGER NOT NULL, PRIMARY KEY(categoryId))")
+            }
+        }
+
         fun create(context: Context, passphrase: ByteArray): AppDb {
             System.loadLibrary("sqlcipher")
             return Room.databaseBuilder(context, AppDb::class.java, "allbanks.db")
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
+                .addMigrations(MIGRATION_1_2)
                 .build()
         }
     }

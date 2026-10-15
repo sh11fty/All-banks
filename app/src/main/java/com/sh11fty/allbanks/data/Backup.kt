@@ -17,6 +17,7 @@ private data class BackupFile(
     val transactions: List<TxnEntity>,
     val categories: List<CategoryEntity>,
     val rules: List<RuleEntity>,
+    val budgets: List<BudgetEntity> = emptyList(),
 )
 
 /**
@@ -37,7 +38,7 @@ object Backup {
         val d = db.dao()
         val plain = json.encodeToString(
             BackupFile(
-                d.accountsOnce(), d.transactionsOnce(), d.categoriesOnce(), d.rulesOnce()
+                d.accountsOnce(), d.transactionsOnce(), d.categoriesOnce(), d.rulesOnce(), d.budgetsOnce()
             )
         ).toByteArray()
         val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
@@ -61,10 +62,11 @@ object Backup {
         val b = json.decodeFromString<BackupFile>(String(plain))
         val d = db.dao()
         db.withTransaction {
-            d.deleteAllTxns(); d.deleteAllRules(); d.deleteAllCategories(); d.deleteAllAccounts()
+            d.deleteAllTxns(); d.deleteAllRules(); d.deleteAllBudgets(); d.deleteAllCategories(); d.deleteAllAccounts()
             d.upsertAccounts(b.accounts)
             d.upsertCategories(b.categories)
             d.upsertRules(b.rules)
+            d.upsertBudgets(b.budgets)
             d.upsertTxns(b.transactions)
         }
     }

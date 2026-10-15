@@ -2,6 +2,8 @@ package com.sh11fty.allbanks.data
 
 import android.graphics.Color
 import androidx.room.withTransaction
+import com.sh11fty.allbanks.domain.DefaultCategories
+import com.sh11fty.allbanks.domain.Insights
 import com.sh11fty.allbanks.domain.Money
 import com.sh11fty.allbanks.domain.RuleEngine
 import com.sh11fty.allbanks.domain.TransferMatcher
@@ -109,22 +111,58 @@ class Repository(val db: AppDb, private val vault: Vault) {
         return SyncSummary(added, errors, warnings)
     }
 
-    /** Rule match first, then Endute's own enrichment category. Manual choices are never touched. */
+    /** Makes sure the built-in categories exist; returns them by lower-case name. */
+    suspend fun ensureCategories(): Map<String, CategoryEntity> {
+        val existing = dao.categoriesOnce().associateBy { it.name.lowercase() }.toMutableMap()
+        for ((name, colour) in DefaultCategories.all) {
+            if (name.lowercase() !in existing) {
+                val c = CategoryEntity(name = name, colour = colour)
+                existing[name.lowercase()] = c.copy(id = dao.insertCategory(c))
+            }
+        }
+        return existing
+    }
+
+    /**
+     * One-off tidy-up: older versions created a category for every label Endute sent. Fold those into
+     * the concise built-in set. Categories you made yourself (no matching Endute label) are kept.
+     */
+    suspend fun migrateLegacyCategories() {
+        val defaults = ensureCategories()
+        val txns = dao.transactionsOnce()
+        val providerNames = txns.mapNotNull { it.providerCategory?.trim()?.lowercase() }.toSet()
+        db.withTransaction {
+            for (c in dao.categoriesOnce()) {
+                if (c.name.lowercase() in DefaultCategories.names) continue
+                val auto = c.name.lowercase() in providerNames
+                val mapped = DefaultCategories.map(c.name)
+                val target = when {
+                    mapped != null -> defaults[mapped.lowercase()]
+                    auto -> defaults[DefaultCategories.OTHER.lowercase()]
+                    else -> null
+                } ?: continue
+                dao.reassignTxnCategory(c.id, target.id)
+                dao.reassignRuleCategory(c.id, target.id)
+                dao.reparentChildren(c.id, null)
+                dao.deleteBudget(c.id)
+                dao.deleteCategory(c.id)
+            }
+        }
+    }
+
+    /** Rule match first, then Endute's own category mapped onto the built-in set. Manual choices are never touched. */
     suspend fun categorise(all: Boolean) {
         val rules = dao.rulesOnce()
-        val cats = dao.categoriesOnce().associateBy { it.name.lowercase() }.toMutableMap()
-        val txns = dao.transactionsOnce().filter { !it.categoryManual && (all || it.categoryId == null) }
+        val defaults = ensureCategories()
+        val every = dao.transactionsOnce()
+        val counterpart = RuleEngine.counterparts(every)
+        val txns = every.filter { !it.categoryManual && (all || it.categoryId == null) }
         db.withTransaction {
             for (t in txns) {
-                var target = RuleEngine.firstMatch(rules, t)?.categoryId
-                if (target == null) {
-                    val name = t.providerCategory?.trim().orEmpty()
-                    if (name.isNotEmpty()) {
-                        target = cats.getOrPut(name.lowercase()) {
-                            val c = CategoryEntity(name = name, colour = colourFor(name))
-                            c.copy(id = dao.insertCategory(c))
-                        }.id
-                    }
+                var target = RuleEngine.firstMatch(rules, t, counterpart[t.id])?.categoryId
+                if (target == null && !t.providerCategory.isNullOrBlank()) {
+                    val name = DefaultCategories.map(t.providerCategory) ?: DefaultCategories.OTHER
+                    target = defaults[name.lowercase()]?.id
                 }
                 if (target != t.categoryId) dao.setAutoCategory(t.id, target)
             }
@@ -172,6 +210,7 @@ class Repository(val db: AppDb, private val vault: Vault) {
 
     suspend fun categoriseOne(t: TxnEntity, categoryId: Long?, rulePattern: String?) {
         dao.setCategory(t.id, categoryId, manual = true)
+        if (t.reviewState != 0) dao.setReviewState(t.id, 0)
         if (categoryId != null && !rulePattern.isNullOrBlank()) {
             val field = when {
                 rulePattern == t.merchantName -> "merchant"
@@ -192,10 +231,53 @@ class Repository(val db: AppDb, private val vault: Vault) {
         }
     }
 
-    suspend fun newCategory(name: String): Long {
+    suspend fun newCategory(name: String, parentId: Long? = null): Long {
         val clean = name.trim()
-        dao.categoriesOnce().firstOrNull { it.name.equals(clean, ignoreCase = true) }
+        dao.categoriesOnce().firstOrNull { it.name.equals(clean, ignoreCase = true) && it.parentId == parentId }
             ?.let { return it.id }
-        return dao.insertCategory(CategoryEntity(name = clean, colour = colourFor(clean)))
+        return dao.insertCategory(CategoryEntity(name = clean, colour = colourFor(clean), parentId = parentId))
+    }
+
+    suspend fun renameCategory(c: CategoryEntity, name: String) {
+        if (name.isNotBlank()) dao.upsertCategories(listOf(c.copy(name = name.trim())))
+    }
+
+    suspend fun recolourCategory(c: CategoryEntity, colour: Int) = dao.upsertCategories(listOf(c.copy(colour = colour)))
+
+    /** Moves everything from [from] into [into] (or to Other) and removes [from]; its children move up. */
+    suspend fun mergeCategory(from: CategoryEntity, into: Long?) {
+        val target = into ?: ensureCategories()[DefaultCategories.OTHER.lowercase()]?.id
+        if (target == null || target == from.id) return
+        db.withTransaction {
+            dao.reassignTxnCategory(from.id, target)
+            dao.reassignRuleCategory(from.id, target)
+            dao.reparentChildren(from.id, from.parentId)
+            dao.deleteBudget(from.id)
+            dao.deleteCategory(from.id)
+        }
+    }
+
+    suspend fun reviewLater(t: TxnEntity, state: Int) = dao.setReviewState(t.id, state)
+    suspend fun candidateLater(c: CandidateEntity, later: Boolean) = dao.setCandidateLater(c.outId, c.inId, later)
+    suspend fun setNote(t: TxnEntity, note: String) = dao.setNote(t.id, note.trim().ifEmpty { null })
+
+    /** Budgets at or beyond [threshold] of their limit this month, as "Name: £x of £y". */
+    suspend fun budgetAlerts(threshold: Double = 0.9): List<Pair<Long, String>> {
+        val budgets = dao.budgetsOnce()
+        if (budgets.isEmpty()) return emptyList()
+        val cats = dao.categoriesOnce()
+        val included = dao.accountsOnce().filter { it.included }.map { it.id }.toSet()
+        val month = LocalDate.now().toString().substring(0, 7)
+        val txns = dao.transactionsOnce().filter {
+            it.bookingDate.startsWith(month) && it.transferId == null && it.accountId in included && it.amountMinor < 0
+        }
+        return budgets.mapNotNull { b ->
+            val ids = Insights.withChildren(b.categoryId, cats)
+            val spent = txns.filter { it.categoryId in ids }.sumOf { -it.amountMinor }
+            if (b.limitMinor > 0 && spent >= b.limitMinor * threshold) {
+                val name = cats.firstOrNull { it.id == b.categoryId }?.name ?: return@mapNotNull null
+                b.categoryId to "$name: £%.2f of £%.2f".format(spent / 100.0, b.limitMinor / 100.0)
+            } else null
+        }
     }
 }

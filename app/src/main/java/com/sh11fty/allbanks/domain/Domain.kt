@@ -117,7 +117,20 @@ object TransferMatcher {
 }
 
 object RuleEngine {
-    fun matches(rule: RuleEntity, t: TxnEntity): Boolean {
+    /** transferId -> legs, so each leg can see the account on the other side of its transfer. */
+    fun counterparts(txns: List<TxnEntity>): Map<String, String> {
+        val out = HashMap<String, String>()
+        txns.filter { it.transferId != null }.groupBy { it.transferId }.values.forEach { legs ->
+            if (legs.size == 2) {
+                out[legs[0].id] = legs[1].accountId
+                out[legs[1].id] = legs[0].accountId
+            }
+        }
+        return out
+    }
+
+    /** [counterpartAccount] is the account on the other leg when [t] is part of a linked transfer. */
+    fun matches(rule: RuleEntity, t: TxnEntity, counterpartAccount: String? = null): Boolean {
         if (!rule.enabled) return false
         when (rule.direction) {
             1 -> if (t.amountMinor <= 0) return false
@@ -126,7 +139,13 @@ object RuleEngine {
         val abs = abs(t.amountMinor)
         if (rule.minAbsMinor != null && abs < rule.minAbsMinor) return false
         if (rule.maxAbsMinor != null && abs > rule.maxAbsMinor) return false
-        if (rule.accountId != null && rule.accountId != t.accountId) return false
+        if (rule.accountId != null || rule.toAccountId != null) {
+            val outgoing = t.amountMinor < 0
+            val from = if (outgoing) t.accountId else counterpartAccount
+            val to = if (outgoing) counterpartAccount else t.accountId
+            if (rule.accountId != null && rule.accountId != from) return false
+            if (rule.toAccountId != null && rule.toAccountId != to) return false
+        }
         val text = when (rule.field) {
             "counterparty" -> t.counterparty
             "merchant" -> t.merchantName
@@ -142,6 +161,6 @@ object RuleEngine {
         }
     }
 
-    fun firstMatch(rules: List<RuleEntity>, t: TxnEntity): RuleEntity? =
-        rules.sortedBy { it.priority }.firstOrNull { matches(it, t) }
+    fun firstMatch(rules: List<RuleEntity>, t: TxnEntity, counterpartAccount: String? = null): RuleEntity? =
+        rules.sortedBy { it.priority }.firstOrNull { matches(it, t, counterpartAccount) }
 }

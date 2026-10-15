@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.sh11fty.allbanks.AllBanksApp
 import com.sh11fty.allbanks.data.AccountEntity
+import com.sh11fty.allbanks.data.BudgetEntity
 import com.sh11fty.allbanks.data.Backup
 import com.sh11fty.allbanks.data.CandidateEntity
 import com.sh11fty.allbanks.data.CategoryEntity
@@ -15,6 +16,7 @@ import com.sh11fty.allbanks.update.VersionInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -31,15 +33,45 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val categories = dao.categories().state(emptyList<CategoryEntity>())
     val rules = dao.rules().state(emptyList<RuleEntity>())
     val candidates = dao.candidates().state(emptyList<CandidateEntity>())
+    val budgets = dao.budgets().state(emptyList<BudgetEntity>())
+
+    /** Transfers awaiting a decision plus uncategorised items not snoozed or dismissed. */
+    val reviewCount = combine(candidates, txns) { c, t ->
+        c.count { !it.later } + t.count { it.categoryId == null && it.transferId == null && it.reviewState == 0 }
+    }.state(0)
 
     val syncing = MutableStateFlow(false)
     val message = MutableStateFlow<String?>(null)
     val hasKey = MutableStateFlow(ab.vault.apiKey != null)
     val includeSavings = MutableStateFlow(ab.prefs.getBoolean("includeSavings", true))
+    val hideBalances = MutableStateFlow(ab.prefs.getBoolean("hideBalances", false))
+    val blockScreenshots = MutableStateFlow(ab.prefs.getBoolean("blockScreenshots", false))
     val update = MutableStateFlow<VersionInfo?>(null)
     val updateBusy = MutableStateFlow(false)
 
     private val updater = Updater(app)
+
+    init {
+        run {
+            if (!ab.prefs.getBoolean("catsV2", false)) {
+                repo.migrateLegacyCategories()
+                ab.prefs.edit().putBoolean("catsV2", true).apply()
+            } else {
+                repo.ensureCategories()
+            }
+            repo.categorise(all = false)
+        }
+    }
+
+    fun setHideBalances(v: Boolean) {
+        hideBalances.value = v
+        ab.prefs.edit().putBoolean("hideBalances", v).apply()
+    }
+
+    fun setBlockScreenshots(v: Boolean) {
+        blockScreenshots.value = v
+        ab.prefs.edit().putBoolean("blockScreenshots", v).apply()
+    }
 
     private fun run(block: suspend () -> Unit) = viewModelScope.launch {
         try {
@@ -83,12 +115,64 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         repo.categoriseOne(t, repo.newCategory(name), rulePattern)
     }
 
+    fun createCategory(name: String, parentId: Long? = null, then: (Long) -> Unit = {}) = run {
+        then(repo.newCategory(name, parentId))
+    }
+
+    fun renameCategory(c: CategoryEntity, name: String) = run { repo.renameCategory(c, name) }
+    fun recolourCategory(c: CategoryEntity, colour: Int) = run { repo.recolourCategory(c, colour) }
+    fun mergeCategory(from: CategoryEntity, into: Long?) = run {
+        repo.mergeCategory(from, into)
+        message.value = "Merged \"${from.name}\""
+    }
+
+    fun setBudget(categoryId: Long, limitMinor: Long?) = run {
+        if (limitMinor == null || limitMinor <= 0) dao.deleteBudget(categoryId)
+        else dao.upsertBudget(BudgetEntity(categoryId, limitMinor))
+    }
+
+    fun checkLater(t: TxnEntity) = run { repo.reviewLater(t, 1) }
+    fun dismissReview(t: TxnEntity) = run { repo.reviewLater(t, 2) }
+    fun restoreReview(t: TxnEntity) = run { repo.reviewLater(t, 0) }
+    fun checkLater(c: CandidateEntity) = run { repo.candidateLater(c, true) }
+    fun restoreCandidate(c: CandidateEntity) = run { repo.candidateLater(c, false) }
+    fun saveNote(t: TxnEntity, note: String) = run { repo.setNote(t, note) }
+
+    fun exportCsv(rows: List<TxnEntity>, write: (ByteArray) -> Unit) = run {
+        val accounts = accounts.value.associateBy { it.id }
+        val cats = categories.value.associateBy { it.id }
+        fun q(v: String?) = "\"" + (v ?: "").replace("\"", "\"\"") + "\""
+        val sb = StringBuilder("date,bank,account,amount,currency,merchant,counterparty,description,category,transfer,note\n")
+        rows.forEach { t ->
+            val a = accounts[t.accountId]
+            sb.append(listOf(
+                t.bookingDate, q(a?.institution), q(a?.name), "%.2f".format(t.amountMinor / 100.0), t.currency,
+                q(t.merchantName), q(t.counterparty), q(t.description), q(cats[t.categoryId]?.name),
+                if (t.transferId != null) "yes" else "no", q(t.note),
+            ).joinToString(",")).append('\n')
+        }
+        write(sb.toString().toByteArray())
+        message.value = "Exported ${rows.size} transactions"
+    }
+
     fun unlink(t: TxnEntity) = run { repo.unlink(t) }
     fun confirm(c: CandidateEntity) = run { repo.confirmTransfer(c) }
     fun reject(c: CandidateEntity) = run { repo.rejectTransfer(c) }
 
     fun saveRule(rule: RuleEntity) = run {
         dao.upsertRule(rule)
+        repo.categorise(all = true)
+    }
+
+    /** Swap priority with the neighbouring rule (up = higher priority = lower number). */
+    fun moveRule(r: RuleEntity, up: Boolean) = run {
+        val list = rules.value.sortedWith(compareBy({ it.priority }, { it.id }))
+        val i = list.indexOfFirst { it.id == r.id }
+        val j = if (up) i - 1 else i + 1
+        if (i < 0 || j < 0 || j >= list.size) return@run
+        // Renumber everything so ties can never leave the order ambiguous.
+        val order = list.toMutableList().also { it[i] = list[j]; it[j] = list[i] }
+        dao.upsertRules(order.mapIndexed { idx, x -> x.copy(priority = idx) })
         repo.categorise(all = true)
     }
 

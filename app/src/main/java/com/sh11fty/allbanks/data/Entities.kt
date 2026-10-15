@@ -1,5 +1,6 @@
 package com.sh11fty.allbanks.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -46,6 +47,8 @@ data class TxnEntity(
     val categoryManual: Boolean = false,
     val transferId: String? = null,
     val note: String? = null,
+    /** 0 = normal, 1 = check later, 2 = dismissed from Review. */
+    @ColumnInfo(defaultValue = "0") val reviewState: Int = 0,
 )
 
 @Serializable
@@ -54,6 +57,8 @@ data class CategoryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val colour: Int,
+    /** Optional parent: this category is a subsection of it. */
+    val parentId: Long? = null,
 )
 
 /**
@@ -73,7 +78,10 @@ data class RuleEntity(
     val direction: Int = 0,
     val minAbsMinor: Long? = null,
     val maxAbsMinor: Long? = null,
+    /** Money leaves this account. */
     val accountId: String? = null,
+    /** Money arrives in this account. */
+    val toAccountId: String? = null,
     val categoryId: Long,
     val enabled: Boolean = true,
 )
@@ -85,4 +93,13 @@ data class CandidateEntity(
     val inId: String,
     val score: Int,
     val rejected: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val later: Boolean = false,
+)
+
+/** Optional monthly spending limit for a category (includes its subcategories). */
+@Serializable
+@Entity(tableName = "budgets")
+data class BudgetEntity(
+    @PrimaryKey val categoryId: Long,
+    val limitMinor: Long,
 )

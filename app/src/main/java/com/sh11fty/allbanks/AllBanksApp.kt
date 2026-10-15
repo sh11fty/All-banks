@@ -73,6 +73,15 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             if (s.errors.isNotEmpty()) {
                 AllBanksApp.notify(app, 2, "Some accounts failed to sync", s.errors.joinToString("\n"))
             }
+            val month = java.time.LocalDate.now().toString().substring(0, 7)
+            val seen = app.prefs.getStringSet("budgetAlerts", emptySet()).orEmpty()
+            val fresh = app.repo.budgetAlerts().filter { "$month:${it.first}" !in seen }
+            if (fresh.isNotEmpty()) {
+                AllBanksApp.notify(app, 4, "Budget limit close", fresh.joinToString("\n") { it.second })
+                app.prefs.edit()
+                    .putStringSet("budgetAlerts", seen.filter { it.startsWith(month) }.toSet() + fresh.map { "$month:${it.first}" })
+                    .apply()
+            }
             Result.success()
         } catch (e: IOException) {
             Result.retry()

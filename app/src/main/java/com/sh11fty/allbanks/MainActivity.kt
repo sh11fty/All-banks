@@ -30,6 +30,9 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if ((application as AllBanksApp).prefs.getBoolean("blockScreenshots", false)) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        }
         setContent {
             AppTheme {
                 if (locked) {
