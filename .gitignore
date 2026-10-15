@@ -11,3 +11,4 @@ captures/
 *.apk
 version.json
 .env
+.kotlin/
