@@ -9,7 +9,11 @@ import com.sh11fty.allbanks.data.BudgetEntity
 import com.sh11fty.allbanks.data.Backup
 import com.sh11fty.allbanks.data.CandidateEntity
 import com.sh11fty.allbanks.data.CategoryEntity
+import com.sh11fty.allbanks.data.Repository
 import com.sh11fty.allbanks.data.RuleEntity
+import com.sh11fty.allbanks.data.UndoSnapshot
+import com.sh11fty.allbanks.domain.DefaultCategories
+import com.sh11fty.allbanks.domain.Suggest
 import com.sh11fty.allbanks.data.TxnEntity
 import com.sh11fty.allbanks.update.Updater
 import com.sh11fty.allbanks.update.VersionInfo
@@ -36,9 +40,32 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val budgets = dao.budgets().state(emptyList<BudgetEntity>())
 
     /** Transfers awaiting a decision plus uncategorised items not snoozed or dismissed. */
-    val reviewCount = combine(candidates, txns) { c, t ->
-        c.count { !it.later } + t.count { it.categoryId == null && it.transferId == null && it.reviewState == 0 }
+    val reviewCount = combine(candidates, txns, categories) { c, t, cats ->
+        val other = cats.firstOrNull { it.name == DefaultCategories.OTHER && it.parentId == null }?.id
+        c.count { !it.later } + t.count { Suggest.isUnsorted(it, other) }
     }.state(0)
+
+    class UndoItem(val id: Long, val snapshot: UndoSnapshot)
+
+    /** The last reversible action; the UI shows it as a snackbar with an Undo button. */
+    val undo = MutableStateFlow<UndoItem?>(null)
+    private var undoCounter = 0L
+
+    private fun offerUndo(s: UndoSnapshot) { undo.value = UndoItem(++undoCounter, s) }
+
+    fun performUndo(item: UndoItem) = run {
+        repo.undo(item.snapshot)
+        message.value = "Undone"
+    }
+
+    private val dismissedKey = "dismissedRuleIdeas"
+    val dismissedRuleIdeas = MutableStateFlow(ab.prefs.getStringSet(dismissedKey, emptySet()).orEmpty())
+
+    fun dismissRuleIdea(key: String) {
+        val next = dismissedRuleIdeas.value + key
+        dismissedRuleIdeas.value = next
+        ab.prefs.edit().putStringSet(dismissedKey, next).apply()
+    }
 
     val syncing = MutableStateFlow(false)
     val message = MutableStateFlow<String?>(null)
@@ -59,7 +86,13 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             } else {
                 repo.ensureCategories()
             }
-            repo.categorise(all = false)
+            // v3 adds category sources, rule links and merchant names; fill them in once for existing data.
+            if (!ab.prefs.getBoolean("catsV3", false)) {
+                repo.categorise(all = true)
+                ab.prefs.edit().putBoolean("catsV3", true).apply()
+            } else {
+                repo.categorise(all = false)
+            }
         }
     }
 
@@ -108,11 +141,54 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     fun setIncluded(a: AccountEntity, v: Boolean) = run { dao.setIncluded(a.id, v) }
 
-    fun categorise(t: TxnEntity, categoryId: Long?, rulePattern: String?) =
-        run { repo.categoriseOne(t, categoryId, rulePattern) }
+    /**
+     * Saves the transaction sheet. [similar] are look-alike transactions that get the same category;
+     * [rule] makes it automatic from now on.
+     */
+    fun saveTxn(
+        t: TxnEntity,
+        categoryId: Long?,
+        similar: List<TxnEntity>,
+        rule: Repository.RuleDraft?,
+        exclude: Boolean,
+        note: String,
+        done: () -> Unit = {},
+    ) = run {
+        val name = categoryId?.let { id -> categories.value.firstOrNull { it.id == id }?.name }
+        val n = 1 + similar.size
+        val label = when {
+            name != null -> "Categorised $n as $name"
+            else -> "Saved"
+        }
+        offerUndo(repo.saveEdit(t, categoryId, similar, rule, exclude, note, label))
+        done()
+    }
 
-    fun categoriseNew(t: TxnEntity, name: String, rulePattern: String?) = run {
-        repo.categoriseOne(t, repo.newCategory(name), rulePattern)
+    /** One-tap categorise from a suggestion chip; also sorts look-alike transactions that still need a category. */
+    fun quickCategorise(t: TxnEntity, categoryId: Long) {
+        val other = categories.value.firstOrNull { it.name == DefaultCategories.OTHER && it.parentId == null }?.id
+        val similar = Suggest.similar(t, txns.value) { Suggest.isUnsorted(it, other) }
+        saveTxn(t, categoryId, similar, null, t.excluded, t.note.orEmpty())
+    }
+
+    /** Applies one category to several selected transactions. */
+    fun categoriseMany(ts: List<TxnEntity>, categoryId: Long, rule: Repository.RuleDraft?) = run {
+        val name = categories.value.firstOrNull { it.id == categoryId }?.name ?: "category"
+        val first = ts.first()
+        offerUndo(repo.saveEdit(first, categoryId, ts.drop(1), rule, first.excluded, first.note.orEmpty(), "Categorised ${ts.size} as $name"))
+    }
+
+    fun setExcluded(ts: List<TxnEntity>, excluded: Boolean) = run {
+        offerUndo(repo.mutate(ts.map { it.id }, if (excluded) "Excluded ${ts.size} from spending" else "Included ${ts.size} in spending") { it.copy(excluded = excluded) })
+    }
+
+    fun setReviewState(ts: List<TxnEntity>, state: Int) = run {
+        val label = when (state) { 1 -> "Parked ${ts.size} for later"; 2 -> "Marked ${ts.size} done"; else -> "Moved back" }
+        offerUndo(repo.mutate(ts.map { it.id }, label) { it.copy(reviewState = state) })
+    }
+
+    fun renameMerchant(oldName: String, newName: String) = run {
+        if (newName.isNotBlank() && newName != oldName) offerUndo(repo.renameMerchant(oldName, newName))
     }
 
     fun createCategory(name: String, parentId: Long? = null, then: (Long) -> Unit = {}) = run {
@@ -121,6 +197,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     fun renameCategory(c: CategoryEntity, name: String) = run { repo.renameCategory(c, name) }
     fun recolourCategory(c: CategoryEntity, colour: Int) = run { repo.recolourCategory(c, colour) }
+    fun setCategoryIcon(c: CategoryEntity, icon: String) = run { dao.upsertCategories(listOf(c.copy(icon = icon))) }
     fun mergeCategory(from: CategoryEntity, into: Long?) = run {
         repo.mergeCategory(from, into)
         message.value = "Merged \"${from.name}\""
@@ -131,12 +208,11 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         else dao.upsertBudget(BudgetEntity(categoryId, limitMinor))
     }
 
-    fun checkLater(t: TxnEntity) = run { repo.reviewLater(t, 1) }
-    fun dismissReview(t: TxnEntity) = run { repo.reviewLater(t, 2) }
-    fun restoreReview(t: TxnEntity) = run { repo.reviewLater(t, 0) }
+    fun checkLater(t: TxnEntity) = setReviewState(listOf(t), 1)
+    fun dismissReview(t: TxnEntity) = setReviewState(listOf(t), 2)
+    fun restoreReview(t: TxnEntity) = setReviewState(listOf(t), 0)
     fun checkLater(c: CandidateEntity) = run { repo.candidateLater(c, true) }
     fun restoreCandidate(c: CandidateEntity) = run { repo.candidateLater(c, false) }
-    fun saveNote(t: TxnEntity, note: String) = run { repo.setNote(t, note) }
 
     fun exportCsv(rows: List<TxnEntity>, write: (ByteArray) -> Unit) = run {
         val accounts = accounts.value.associateBy { it.id }
@@ -159,10 +235,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun confirm(c: CandidateEntity) = run { repo.confirmTransfer(c) }
     fun reject(c: CandidateEntity) = run { repo.rejectTransfer(c) }
 
-    fun saveRule(rule: RuleEntity) = run {
-        dao.upsertRule(rule)
-        repo.categorise(all = true)
-    }
+    fun saveRule(rule: RuleEntity, applyToPast: Boolean = true) = run { repo.saveRule(rule, applyToPast) }
 
     /** Swap priority with the neighbouring rule (up = higher priority = lower number). */
     fun moveRule(r: RuleEntity, up: Boolean) = run {
@@ -176,7 +249,10 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         repo.categorise(all = true)
     }
 
-    fun deleteRule(r: RuleEntity) = run { dao.deleteRule(r.id) }
+    fun deleteRule(r: RuleEntity) = run {
+        dao.deleteRule(r.id)
+        repo.categorise(all = true)
+    }
     fun toggleRule(r: RuleEntity) = run { dao.upsertRule(r.copy(enabled = !r.enabled)) }
     fun reapplyRules() = run {
         repo.categorise(all = true)

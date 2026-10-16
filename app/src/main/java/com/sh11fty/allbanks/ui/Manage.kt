@@ -100,13 +100,14 @@ private val swatches = listOf(
 ).map { it.toInt() }
 
 @Composable
-fun CategoriesScreen(vm: MainVm) {
+fun CategoriesScreen(vm: MainVm, onOpen: (Long) -> Unit) {
     val cats by vm.categories.collectAsState()
     val txns by vm.txns.collectAsState()
     var addParent by remember { mutableStateOf<CategoryEntity?>(null) }
     var addTop by remember { mutableStateOf(false) }
     var rename by remember { mutableStateOf<CategoryEntity?>(null) }
     var recolour by remember { mutableStateOf<CategoryEntity?>(null) }
+    var reicon by remember { mutableStateOf<CategoryEntity?>(null) }
     var merge by remember { mutableStateOf<CategoryEntity?>(null) }
 
     val usage = remember(txns) { txns.groupingBy { it.categoryId ?: -1L }.eachCount() }
@@ -120,10 +121,10 @@ fun CategoriesScreen(vm: MainVm) {
         }
         items(rows, key = { it.first.id }) { (c, depth) ->
             var menu by remember { mutableStateOf(false) }
-            Card(Modifier.fillMaxWidth().padding(start = (depth * 24).dp)) {
-                Row(Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ColourDot(c.colour, 16)
-                    Spacer(Modifier.width(10.dp))
+            Card(Modifier.fillMaxWidth().padding(start = (depth * 24).dp).clickable { onOpen(c.id) }) {
+                Row(Modifier.padding(start = 12.dp, top = 6.dp, bottom = 6.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CategoryBadge(c, 40)
+                    Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(c.name, fontWeight = FontWeight.Medium)
                         Text("${usage[c.id] ?: 0} transactions", fontSize = 12.sp)
@@ -133,6 +134,7 @@ fun CategoriesScreen(vm: MainVm) {
                         DropdownMenu(menu, { menu = false }) {
                             if (c.parentId == null) DropdownMenuItem(text = { Text("Add subcategory") }, onClick = { menu = false; addParent = c })
                             DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; rename = c })
+                            DropdownMenuItem(text = { Text("Change icon") }, onClick = { menu = false; reicon = c })
                             DropdownMenuItem(text = { Text("Change colour") }, onClick = { menu = false; recolour = c })
                             DropdownMenuItem(text = { Text("Merge into… / delete") }, onClick = { menu = false; merge = c })
                         }
@@ -148,6 +150,24 @@ fun CategoriesScreen(vm: MainVm) {
     }
     rename?.let { c ->
         TextPromptDialog("Rename", initial = c.name, label = "Name", confirm = "Save", onDismiss = { rename = null }) { vm.renameCategory(c, it) }
+    }
+    reicon?.let { c ->
+        AlertDialog(
+            onDismissRequest = { reicon = null },
+            title = { Text("Icon for ${c.name}") },
+            confirmButton = { TextButton(onClick = { reicon = null }) { Text("Close") } },
+            text = {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    com.sh11fty.allbanks.domain.DefaultCategories.iconChoices.forEach { e ->
+                        Box(
+                            Modifier.size(42.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)
+                                .clickable { vm.setCategoryIcon(c, e); reicon = null },
+                            contentAlignment = Alignment.Center,
+                        ) { Text(e, fontSize = 20.sp) }
+                    }
+                }
+            },
+        )
     }
     recolour?.let { c ->
         AlertDialog(
@@ -187,8 +207,9 @@ fun CategoriesScreen(vm: MainVm) {
 
 @Composable
 fun BudgetProgress(name: String, spent: Long, limit: Long, colour: Int) {
-    val frac = if (limit > 0) (spent.toFloat() / limit).coerceAtLeast(0f) else 0f
-    val over = frac >= 1f
+    val target = if (limit > 0) (spent.toFloat() / limit).coerceAtLeast(0f) else 0f
+    val frac by androidx.compose.animation.core.animateFloatAsState(target, androidx.compose.animation.core.tween(600), label = "budget")
+    val over = target >= 1f
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Row {
             Text(name, Modifier.weight(1f), fontWeight = FontWeight.Medium)
@@ -214,7 +235,7 @@ fun BudgetsScreen(vm: MainVm) {
     val month = LocalDate.now().toString().substring(0, 7)
     val counted = accounts.filter { it.included }.map { it.id }.toSet()
     val thisMonth = remember(txns, accounts) {
-        txns.filter { it.bookingDate.startsWith(month) && it.transferId == null && it.accountId in counted && it.amountMinor < 0 }
+        txns.filter { it.bookingDate.startsWith(month) && it.transferId == null && it.accountId in counted && it.amountMinor < 0 && !it.excluded }
     }
     val usage = remember(txns) { txns.groupingBy { it.categoryId ?: -1L }.eachCount() }
 

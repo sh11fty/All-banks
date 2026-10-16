@@ -7,6 +7,16 @@ import android.content.ContextWrapper
 import android.app.Activity
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.sh11fty.allbanks.domain.Suggest
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -172,6 +182,15 @@ fun ColourDot(colour: Int, size: Int = 12) {
     Box(Modifier.size(size.dp).clip(CircleShape).background(Color(colour)))
 }
 
+/** Round category badge: the category's emoji on a soft tint of its colour. */
+@Composable
+fun CategoryBadge(c: CategoryEntity?, size: Int = 40, fallback: String = "?") {
+    val tint = c?.let { Color(it.colour) } ?: MaterialTheme.colorScheme.outline
+    Box(Modifier.size(size.dp).clip(CircleShape).background(tint.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
+        Text(c?.icon ?: c?.name?.firstOrNull()?.uppercase() ?: fallback, fontSize = (size * 0.45f).sp, color = tint, fontWeight = FontWeight.Bold)
+    }
+}
+
 /** Section title with an optional trailing action. */
 @Composable
 fun SectionHeader(title: String, action: String? = null, onAction: () -> Unit = {}) {
@@ -282,7 +301,7 @@ fun CategoryPicker(
             options.forEach { (c, path) ->
                 DropdownMenuItem(
                     text = { Text(path) },
-                    leadingIcon = { ColourDot(c.colour) },
+                    leadingIcon = { CategoryBadge(c, 28) },
                     onClick = {
                         text = path; typed = false; expanded = false
                         onSelect(c.id)
@@ -365,34 +384,58 @@ fun <T> FilterMenu(
 // ---------------------------------------------------------------- transaction list
 
 @Composable
-fun TxnRow(t: TxnEntity, account: AccountEntity?, cat: CategoryEntity?, showBank: Boolean = true, onClick: () -> Unit) {
-    val title = t.merchantName ?: t.counterparty ?: t.description
-    val tint = if (t.transferId != null) MaterialTheme.colorScheme.tertiary else cat?.let { Color(it.colour) }
-        ?: MaterialTheme.colorScheme.outline
+fun TxnRow(
+    t: TxnEntity,
+    account: AccountEntity?,
+    cat: CategoryEntity?,
+    showBank: Boolean = true,
+    selected: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    val title = Suggest.title(t)
+    val subtitle = listOfNotNull(
+        account?.institution?.takeIf { showBank },
+        when {
+            t.transferId != null -> "Internal transfer"
+            cat != null -> cat.name
+            else -> "Uncategorised"
+        },
+        if (t.excluded) "Excluded" else null,
+        if (!t.note.isNullOrBlank()) "Note" else null,
+    ).joinToString(" · ")
+    val amount = (if (t.amountMinor > 0) "+" else "") + fmt(t.amountMinor, t.currency)
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth()
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .semantics(mergeDescendants = true) { contentDescription = "$title, $subtitle, $amount, ${dayLabel(t.bookingDate)}" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(44.dp).clip(CircleShape).background(tint.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
-            Text(title.firstOrNull()?.uppercase() ?: "?", fontWeight = FontWeight.Bold, color = tint, fontSize = 17.sp)
+        if (selected) {
+            Box(Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Check, null, tint = MaterialTheme.colorScheme.onPrimary)
+            }
+        } else if (t.transferId != null) {
+            Box(Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+                Text("⇄", color = MaterialTheme.colorScheme.tertiary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+        } else if (cat != null) {
+            CategoryBadge(cat, 44)
+        } else {
+            Box(Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+                Text(title.firstOrNull()?.uppercase() ?: "?", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.outline, fontSize = 17.sp)
+            }
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
-            val sub = listOfNotNull(
-                account?.institution?.takeIf { showBank },
-                when {
-                    t.transferId != null -> "Internal transfer"
-                    cat != null -> cat.name
-                    else -> "Uncategorised"
-                },
-                if (!t.note.isNullOrBlank()) "Note" else null,
-            ).joinToString(" · ")
-            Text(sub, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.width(8.dp))
         Text(
-            (if (t.amountMinor > 0) "+" else "") + fmt(t.amountMinor, t.currency),
+            amount,
             style = MaterialTheme.typography.titleSmall,
             color = if (t.amountMinor > 0) positiveColour() else MaterialTheme.colorScheme.onSurface,
         )
@@ -407,13 +450,17 @@ fun TxnList(
     cats: Map<Long, CategoryEntity>,
     modifier: Modifier = Modifier,
     showBank: Boolean = true,
+    selected: Set<String> = emptySet(),
+    onLongClick: ((TxnEntity) -> Unit)? = null,
+    header: (@Composable () -> Unit)? = null,
     onClick: (TxnEntity) -> Unit,
 ) {
     val groups = remember(txns) { txns.take(2000).groupBy { it.bookingDate }.entries.toList() }
     LazyColumn(modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
+        if (header != null) item(key = "header") { header() }
         groups.forEach { (date, list) ->
             stickyHeader(key = "h$date") {
-                val net = list.filter { it.transferId == null }.sumOf { it.amountMinor }
+                val net = list.filter { it.transferId == null && !it.excluded }.sumOf { it.amountMinor }
                 Row(
                     Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
                         .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -424,10 +471,27 @@ fun TxnList(
                 }
             }
             items(list, key = { it.id }) { t ->
-                TxnRow(t, accounts[t.accountId], t.categoryId?.let(cats::get), showBank) { onClick(t) }
+                TxnRow(
+                    t, accounts[t.accountId], t.categoryId?.let(cats::get), showBank,
+                    selected = t.id in selected,
+                    onLongClick = onLongClick?.let { f -> { f(t) } },
+                ) { onClick(t) }
                 HorizontalDivider(Modifier.padding(start = 74.dp, end = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
+    }
+}
+
+/** Bar shown while rows are selected; [actions] are (label, onClick). */
+@Composable
+fun SelectionBar(count: Int, actions: List<Pair<String, () -> Unit>>, onClear: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer).padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = onClear) { Text("✕", color = MaterialTheme.colorScheme.onPrimaryContainer) }
+        Text("$count selected", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        actions.forEach { (label, f) -> TextButton(onClick = f) { Text(label, color = MaterialTheme.colorScheme.onPrimaryContainer, maxLines = 1) } }
     }
 }
 
@@ -437,19 +501,43 @@ fun TxnList(
 fun Donut(parts: List<Pair<Float, Color>>, modifier: Modifier = Modifier.size(120.dp)) {
     val total = parts.sumOf { it.first.toDouble() }.toFloat()
     val track = MaterialTheme.colorScheme.surfaceVariant
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(parts) { progress.snapTo(0f); progress.animateTo(1f, tween(700)) }
     Canvas(modifier) {
         val stroke = size.minDimension * 0.2f
         val inset = stroke / 2
         val arcSize = Size(size.width - stroke, size.height - stroke)
-        if (total <= 0f) {
-            drawArc(track, 0f, 360f, false, Offset(inset, inset), arcSize, style = Stroke(stroke))
-            return@Canvas
-        }
+        drawArc(track, 0f, 360f, false, Offset(inset, inset), arcSize, style = Stroke(stroke))
+        if (total <= 0f) return@Canvas
         var start = -90f
         parts.forEach { (v, c) ->
-            val sweep = v / total * 360f
-            drawArc(c, start, (sweep - 1.5f).coerceAtLeast(0.5f), false, Offset(inset, inset), arcSize, style = Stroke(stroke))
+            val sweep = v / total * 360f * progress.value
+            drawArc(c, start, (sweep - 1.5f).coerceAtLeast(0.01f), false, Offset(inset, inset), arcSize, style = Stroke(stroke))
             start += sweep
+        }
+    }
+}
+
+/** Simple bar chart; the last bar is highlighted. Labels sit under each bar. */
+@Composable
+fun BarChart(values: List<Pair<String, Long>>, modifier: Modifier = Modifier, barColour: Color = MaterialTheme.colorScheme.primary) {
+    val max = (values.maxOfOrNull { it.second } ?: 0L).coerceAtLeast(1L)
+    val muted = barColour.copy(alpha = 0.35f)
+    val labelColour = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
+        values.forEachIndexed { i, (label, v) ->
+            val frac by animateFloatAsState(v.toFloat() / max, tween(600), label = "bar")
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.height(88.dp).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
+                    Box(
+                        Modifier.fillMaxWidth(0.7f).height((88 * frac).coerceAtLeast(2f).dp)
+                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                            .background(if (i == values.lastIndex) barColour else muted)
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(label, style = MaterialTheme.typography.labelSmall, color = labelColour)
+            }
         }
     }
 }

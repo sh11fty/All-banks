@@ -1,6 +1,7 @@
 package com.sh11fty.allbanks.domain
 
 import com.sh11fty.allbanks.data.AccountEntity
+import com.sh11fty.allbanks.data.NO_CATEGORY
 import com.sh11fty.allbanks.data.RuleEntity
 import com.sh11fty.allbanks.data.TxnEntity
 import java.math.BigDecimal
@@ -163,4 +164,28 @@ object RuleEngine {
 
     fun firstMatch(rules: List<RuleEntity>, t: TxnEntity, counterpartAccount: String? = null): RuleEntity? =
         rules.sortedBy { it.priority }.firstOrNull { matches(it, t, counterpartAccount) }
+
+    /** All matching rules, highest priority first. */
+    fun allMatches(rules: List<RuleEntity>, t: TxnEntity, counterpartAccount: String? = null): List<RuleEntity> =
+        rules.sortedWith(compareBy({ it.priority }, { it.id })).filter { matches(it, t, counterpartAccount) }
+
+    /** What the matching rules decide together: each action comes from the highest-priority rule that sets it. */
+    data class Outcome(
+        val categoryRule: RuleEntity?,
+        val renameTo: String?,
+        val exclude: Boolean,
+        val markReviewed: Boolean,
+        val matched: List<RuleEntity>,
+    )
+
+    fun resolve(rules: List<RuleEntity>, t: TxnEntity, counterpartAccount: String? = null): Outcome {
+        val m = allMatches(rules, t, counterpartAccount)
+        return Outcome(
+            categoryRule = m.firstOrNull { it.categoryId != NO_CATEGORY },
+            renameTo = m.firstNotNullOfOrNull { it.renameTo?.takeIf { n -> n.isNotBlank() } },
+            exclude = m.any { it.excludeFromSpending },
+            markReviewed = m.any { it.markReviewed },
+            matched = m,
+        )
+    }
 }

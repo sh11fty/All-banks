@@ -101,7 +101,7 @@ private enum class Tab(val label: String, val icon: ImageVector) {
 }
 
 private enum class Sub(val title: String) {
-    Rules("Rules"), Categories("Categories"), Budgets("Budgets"), Recurring("Recurring payments")
+    Rules("Rules"), Categories("Categories"), Merchants("Merchants"), Budgets("Budgets"), Recurring("Recurring payments")
 }
 
 /** Keeps content a readable width on tablets and in landscape. */
@@ -112,6 +112,7 @@ fun MainScaffold(vm: MainVm) {
     var tab by remember { mutableStateOf(Tab.Overview) }
     var selectedAccount by remember { mutableStateOf<String?>(null) }
     var sub by remember { mutableStateOf<Sub?>(null) }
+    var categoryDetail by remember { mutableStateOf<Long?>(null) }
     val snack = remember { SnackbarHostState() }
     val message by vm.message.collectAsState()
     val reviewCount by vm.reviewCount.collectAsState()
@@ -124,6 +125,12 @@ fun MainScaffold(vm: MainVm) {
             snack.showSnackbar(it)
             vm.message.value = null
         }
+    }
+    val undo by vm.undo.collectAsState()
+    LaunchedEffect(undo?.id) {
+        val item = undo ?: return@LaunchedEffect
+        val r = snack.showSnackbar(item.snapshot.label, actionLabel = "Undo", duration = androidx.compose.material3.SnackbarDuration.Long)
+        if (r == androidx.compose.material3.SnackbarResult.ActionPerformed) vm.performUndo(item)
     }
     LaunchedEffect(secure) {
         findActivity(ctx)?.window?.let {
@@ -140,7 +147,7 @@ fun MainScaffold(vm: MainVm) {
                     Tab.values().forEach { t ->
                         NavigationBarItem(
                             selected = tab == t,
-                            onClick = { tab = t; selectedAccount = null; sub = null },
+                            onClick = { tab = t; selectedAccount = null; sub = null; categoryDetail = null },
                             icon = {
                                 if (t == Tab.Review && reviewCount > 0) {
                                     BadgedBox(badge = { Badge { Text(if (reviewCount > 99) "99+" else "$reviewCount") } }) { Icon(t.icon, t.label) }
@@ -170,7 +177,8 @@ fun MainScaffold(vm: MainVm) {
                             SubScaffold(s.title, onBack = { sub = null }) {
                                 when (s) {
                                     Sub.Rules -> RulesScreen(vm)
-                                    Sub.Categories -> CategoriesScreen(vm)
+                                    Sub.Categories -> CategoriesScreen(vm) { categoryDetail = it }
+                                    Sub.Merchants -> MerchantsScreen(vm)
                                     Sub.Budgets -> BudgetsScreen(vm)
                                     Sub.Recurring -> RecurringScreen(vm)
                                 }
@@ -187,6 +195,7 @@ fun MainScaffold(vm: MainVm) {
                                 onOpenBudgets = { sub = Sub.Budgets },
                                 onOpenRecurring = { sub = Sub.Recurring },
                                 onSeeActivity = { tab = Tab.Activity },
+                                onOpenCategory = { categoryDetail = it },
                             )
                             Tab.Activity -> ActivityScreen(vm)
                             Tab.Review -> ReviewScreen(vm)
@@ -311,6 +320,7 @@ fun OverviewScreen(
     onOpenBudgets: () -> Unit,
     onOpenRecurring: () -> Unit,
     onSeeActivity: () -> Unit,
+    onOpenCategory: (Long) -> Unit,
 ) {
     val accounts by vm.accounts.collectAsState()
     val txns by vm.txns.collectAsState()
@@ -332,9 +342,9 @@ fun OverviewScreen(
     val real = remember(txns, accounts, includeSavings) { txns.filter { it.transferId == null && it.accountId in countedIds } }
     val thisMonth = remember(real) { real.filter { it.bookingDate.startsWith(month) } }
     val prevMonth = remember(real) { real.filter { it.bookingDate.startsWith(lastMonth) } }
-    val moneyIn = thisMonth.filter { it.amountMinor > 0 }.sumOf { it.amountMinor }
-    val moneyOut = thisMonth.filter { it.amountMinor < 0 }.sumOf { -it.amountMinor }
-    val prevOut = prevMonth.filter { it.amountMinor < 0 }.sumOf { -it.amountMinor }
+    val moneyIn = thisMonth.filter { it.amountMinor > 0 && !it.excluded }.sumOf { it.amountMinor }
+    val moneyOut = thisMonth.filter { it.amountMinor < 0 && !it.excluded }.sumOf { -it.amountMinor }
+    val prevOut = prevMonth.filter { it.amountMinor < 0 && !it.excluded }.sumOf { -it.amountMinor }
 
     val catById = remember(cats) { cats.associateBy { it.id } }
     val accById = remember(accounts) { accounts.associateBy { it.id } }
@@ -342,6 +352,11 @@ fun OverviewScreen(
         Insights.spendByTopCategory(thisMonth, cats).entries.sortedByDescending { it.value }.take(6)
     }
     fun partColour(id: Long?): Color = id?.let(catById::get)?.let { Color(it.colour) } ?: Color.Gray
+
+    val months6 = remember { (5 downTo 0).map { java.time.YearMonth.now().minusMonths(it.toLong()) } }
+    val monthly6 = remember(real) { Insights.monthlySpend(real, months6) }
+    val insightChanges = remember(thisMonth, prevMonth, cats) { Insights.changes(thisMonth, prevMonth, cats) }
+    val insightMerchants = remember(thisMonth) { Insights.merchants(thisMonth.filter { it.amountMinor < 0 }).take(3) }
 
     val trend = remember(counted, txns) { Insights.balanceTrend(counted, txns, 30) }
     val recurring = remember(txns) { Insights.recurring(txns) }
@@ -450,8 +465,11 @@ fun OverviewScreen(
                                 Donut(parts.map { it.value.toFloat() to partColour(it.key) }, Modifier.size(112.dp))
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     parts.forEach { (id, v) ->
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            ColourDot(partColour(id).toArgbInt(), 10)
+                                        Row(
+                                            Modifier.fillMaxWidth().let { m -> if (id != null) m.clickable { onOpenCategory(id) } else m },
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            CategoryBadge(id?.let(catById::get), 24)
                                             Spacer(Modifier.width(8.dp))
                                             Text(
                                                 id?.let(catById::get)?.name ?: "Uncategorised", Modifier.weight(1f),
@@ -468,6 +486,20 @@ fun OverviewScreen(
             }
         }
 
+        item {
+            Section("Last 6 months") {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(18.dp)) {
+                        BarChart(months6.mapIndexed { i, m -> m.month.getDisplayName(java.time.format.TextStyle.SHORT, Locale.UK) to monthly6[i] })
+                    }
+                }
+            }
+        }
+
+        if (insightChanges.isNotEmpty() || insightMerchants.isNotEmpty()) {
+            item { InsightsCard(insightChanges, insightMerchants, catById, onOpenCategory) }
+        }
+
         if (budgets.isNotEmpty()) {
             item {
                 Section("Budgets", "Manage", onOpenBudgets) {
@@ -476,7 +508,7 @@ fun OverviewScreen(
                             budgets.mapNotNull { b -> catById[b.categoryId]?.let { b to it } }
                                 .map { (b, c) ->
                                     val ids = Insights.withChildren(b.categoryId, cats)
-                                    Triple(c, b, thisMonth.filter { it.categoryId in ids && it.amountMinor < 0 }.sumOf { -it.amountMinor })
+                                    Triple(c, b, thisMonth.filter { it.categoryId in ids && it.amountMinor < 0 && !it.excluded }.sumOf { -it.amountMinor })
                                 }
                                 .sortedByDescending { it.third.toDouble() / it.second.limitMinor }
                                 .take(4)
@@ -507,7 +539,7 @@ fun OverviewScreen(
             }
         }
     }
-    editing?.let { TxnSheet(it, vm) { editing = null } }
+    editing?.let { TxnSheet(it, vm, onDismiss = { editing = null }) }
 }
 
 @Composable
@@ -608,7 +640,9 @@ private fun SettingsScreen(vm: MainVm, onNav: (Sub) -> Unit) {
             Card(Modifier.fillMaxWidth()) {
                 NavRow("Rules", "Auto-categorise by text, bank and amount") { onNav(Sub.Rules) }
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-                NavRow("Categories", "Rename, merge, add subsections") { onNav(Sub.Categories) }
+                NavRow("Categories", "Icons, subsections, merge") { onNav(Sub.Categories) }
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                NavRow("Merchants", "Tidy names, merge duplicates") { onNav(Sub.Merchants) }
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
                 NavRow("Budgets", "Monthly limits with alerts") { onNav(Sub.Budgets) }
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)

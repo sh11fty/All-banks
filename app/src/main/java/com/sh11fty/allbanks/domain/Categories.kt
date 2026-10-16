@@ -4,24 +4,33 @@ package com.sh11fty.allbanks.domain
 object DefaultCategories {
     const val OTHER = "Other"
 
-    val all: List<Pair<String, Int>> = listOf(
-        "Groceries" to 0xFF43A047.toInt(),
-        "Dining & takeaways" to 0xFFFB8C00.toInt(),
-        "Transport" to 0xFF1E88E5.toInt(),
-        "Bills & utilities" to 0xFF8E24AA.toInt(),
-        "Shopping" to 0xFFE91E63.toInt(),
-        "Entertainment" to 0xFF00ACC1.toInt(),
-        "Health" to 0xFFE53935.toInt(),
-        "Travel" to 0xFF3949AB.toInt(),
-        "Bank charges & fees" to 0xFF6D4C41.toInt(),
-        "Income" to 0xFF2E7D32.toInt(),
-        "Savings & investments" to 0xFF00897B.toInt(),
-        "Cash" to 0xFF7CB342.toInt(),
-        "Gifts & charity" to 0xFFF4511E.toInt(),
-        OTHER to 0xFF78909C.toInt(),
+    data class Default(val name: String, val colour: Int, val icon: String)
+
+    val all: List<Default> = listOf(
+        Default("Groceries", 0xFF43A047.toInt(), "🛒"),
+        Default("Dining & takeaways", 0xFFFB8C00.toInt(), "🍽️"),
+        Default("Transport", 0xFF1E88E5.toInt(), "🚗"),
+        Default("Bills & utilities", 0xFF8E24AA.toInt(), "💡"),
+        Default("Shopping", 0xFFE91E63.toInt(), "🛍️"),
+        Default("Entertainment", 0xFF00ACC1.toInt(), "🎬"),
+        Default("Health", 0xFFE53935.toInt(), "🩺"),
+        Default("Travel", 0xFF3949AB.toInt(), "✈️"),
+        Default("Bank charges & fees", 0xFF6D4C41.toInt(), "🏦"),
+        Default("Income", 0xFF2E7D32.toInt(), "💰"),
+        Default("Savings & investments", 0xFF00897B.toInt(), "🐖"),
+        Default("Cash", 0xFF7CB342.toInt(), "💵"),
+        Default("Gifts & charity", 0xFFF4511E.toInt(), "🎁"),
+        Default(OTHER, 0xFF78909C.toInt(), "📦"),
     )
 
-    val names: Set<String> = all.map { it.first.lowercase() }.toSet()
+    /** Emoji offered when you pick a category icon. */
+    val iconChoices: List<String> = listOf(
+        "🛒", "🍽️", "☕", "🍺", "🍕", "🚗", "🚌", "🚆", "✈️", "⛽", "🏠", "💡", "📱", "🌐", "🛍️", "👕", "🎬", "🎮",
+        "🎵", "📚", "🩺", "💊", "🏋️", "🐶", "🎁", "❤️", "👶", "🎓", "🔧", "🛠️", "🏦", "💰", "💵", "🐖", "📈", "🧾",
+        "🧴", "💇", "🎉", "🌳", "🏖️", "📦", "⭐", "🔁",
+    )
+
+    val names: Set<String> = all.map { it.name.lowercase() }.toSet()
 
     private val keywords: List<Pair<Regex, String>> = listOf(
         "fee|charge|interest|overdraft|commission" to "Bank charges & fees",
@@ -43,7 +52,7 @@ object DefaultCategories {
     fun map(provider: String?): String? {
         val p = provider?.trim().orEmpty()
         if (p.isEmpty()) return null
-        all.firstOrNull { it.first.equals(p, ignoreCase = true) }?.let { return it.first }
+        all.firstOrNull { it.name.equals(p, ignoreCase = true) }?.let { return it.name }
         return keywords.firstOrNull { it.first.containsMatchIn(p) }?.second
     }
 }

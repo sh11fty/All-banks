@@ -38,7 +38,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.sh11fty.allbanks.data.TxnEntity
@@ -87,6 +89,9 @@ fun ActivityScreen(vm: MainVm) {
     var month by remember { mutableStateOf<YearMonth?>(YearMonth.now()) }
     var hideTransfers by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<TxnEntity?>(null) }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var bulk by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
 
     val byId = remember(accounts) { accounts.associateBy { it.id } }
     val catById = remember(cats) { cats.associateBy { it.id } }
@@ -113,7 +118,7 @@ fun ActivityScreen(vm: MainVm) {
                 ).any { it.contains(query, ignoreCase = true) })
         }
     }
-    val real = shown.filter { it.transferId == null }
+    val real = shown.filter { it.transferId == null && !it.excluded }
     val moneyIn = real.filter { it.amountMinor > 0 }.sumOf { it.amountMinor }
     val moneyOut = real.filter { it.amountMinor < 0 }.sumOf { -it.amountMinor }
 
@@ -122,6 +127,18 @@ fun ActivityScreen(vm: MainVm) {
     }
 
     Column(Modifier.fillMaxSize()) {
+        if (selected.isNotEmpty()) {
+            val chosenTxns = txns.filter { it.id in selected }
+            SelectionBar(
+                selected.size,
+                listOf(
+                    "Categorise" to { bulk = true },
+                    "Exclude" to { vm.setExcluded(chosenTxns, true); selected = emptySet() },
+                    "Include" to { vm.setExcluded(chosenTxns, false); selected = emptySet() },
+                ),
+                onClear = { selected = emptySet() },
+            )
+        }
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Activity", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
             TextButton(onClick = { export.launch("all-banks-transactions.csv") }, enabled = shown.isNotEmpty()) { Text("Export CSV") }
@@ -161,9 +178,17 @@ fun ActivityScreen(vm: MainVm) {
         }
         InOutStrip(moneyIn, moneyOut, shown.size)
         if (shown.isEmpty()) EmptyState("Nothing to show", "Try a different month or clear a filter.")
-        TxnList(shown, byId, catById, Modifier.weight(1f)) { editing = it }
+        TxnList(
+            shown, byId, catById, Modifier.weight(1f),
+            selected = selected,
+            onLongClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); selected = selected + it.id },
+        ) { t -> if (selected.isNotEmpty()) selected = if (t.id in selected) selected - t.id else selected + t.id else editing = t }
     }
-    editing?.let { TxnSheet(it, vm) { editing = null } }
+    editing?.let { TxnSheet(it, vm, onDismiss = { editing = null }) }
+    if (bulk) {
+        val ts = txns.filter { it.id in selected }
+        if (ts.isEmpty()) bulk = false else BulkSheet(ts, vm, onDismiss = { bulk = false }) { bulk = false; selected = emptySet() }
+    }
 }
 
 @Composable
@@ -214,5 +239,5 @@ fun AccountScreen(vm: MainVm, accountId: String) {
         if (shown.isEmpty()) EmptyState("No transactions", "Nothing to show for this account yet.")
         TxnList(shown, accounts.associateBy { it.id }, catById, Modifier.weight(1f), showBank = false) { editing = it }
     }
-    editing?.let { TxnSheet(it, vm) { editing = null } }
+    editing?.let { TxnSheet(it, vm, onDismiss = { editing = null }) }
 }

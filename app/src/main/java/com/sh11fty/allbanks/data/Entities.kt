@@ -49,6 +49,14 @@ data class TxnEntity(
     val note: String? = null,
     /** 0 = normal, 1 = check later, 2 = dismissed from Review. */
     @ColumnInfo(defaultValue = "0") val reviewState: Int = 0,
+    /** Where the category came from: 0 none, 1 the bank's label, 2 a rule, 3 you. */
+    @ColumnInfo(defaultValue = "0") val categorySource: Int = 0,
+    /** The rule that supplied the category when [categorySource] is 2. */
+    val ruleId: Long? = null,
+    /** Left out of spending totals, budgets and charts (refunds, one-offs). */
+    @ColumnInfo(defaultValue = "0") val excluded: Boolean = false,
+    /** Cleaned-up merchant name (from a rule or a merchant rename). */
+    val displayName: String? = null,
 )
 
 @Serializable
@@ -59,6 +67,8 @@ data class CategoryEntity(
     val colour: Int,
     /** Optional parent: this category is a subsection of it. */
     val parentId: Long? = null,
+    /** Emoji shown in the category badge. */
+    val icon: String? = null,
 )
 
 /**
@@ -82,8 +92,22 @@ data class RuleEntity(
     val accountId: String? = null,
     /** Money arrives in this account. */
     val toAccountId: String? = null,
+    /** [NO_CATEGORY] means the rule leaves the category alone (e.g. it only renames). */
     val categoryId: Long,
     val enabled: Boolean = true,
+    val renameTo: String? = null,
+    @ColumnInfo(defaultValue = "0") val excludeFromSpending: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val markReviewed: Boolean = false,
+)
+
+const val NO_CATEGORY = 0L
+
+/** Merchant rename/merge memory: raw merchant key -> the name you want to see. */
+@Serializable
+@Entity(tableName = "merchant_aliases")
+data class MerchantAlias(
+    @PrimaryKey val rawKey: String,
+    val name: String,
 )
 
 /** A possible internal transfer awaiting confirmation (or rejected by the user). */

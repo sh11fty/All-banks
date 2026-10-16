@@ -4,6 +4,7 @@ import com.sh11fty.allbanks.data.AccountEntity
 import com.sh11fty.allbanks.data.CategoryEntity
 import com.sh11fty.allbanks.data.TxnEntity
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.temporal.ChronoUnit
 import kotlin.math.abs
 
@@ -21,9 +22,7 @@ data class Recurring(
 }
 
 object Insights {
-    private fun key(t: TxnEntity): String =
-        (t.merchantName ?: t.counterparty ?: t.description).lowercase()
-            .replace(Regex("[0-9]+"), "").replace(Regex("[^a-z ]"), " ").replace(Regex("\\s+"), " ").trim()
+    private fun key(t: TxnEntity): String = Suggest.merchantKey(t)
 
     /** Outgoing, non-transfer payments that repeat at a steady interval with a steady amount. */
     fun recurring(txns: List<TxnEntity>, today: LocalDate = LocalDate.now()): List<Recurring> {
@@ -81,7 +80,7 @@ object Insights {
             while (c.parentId != null && guard++ < 10) c = byId[c.parentId] ?: break
             return c.id
         }
-        return txns.filter { it.amountMinor < 0 }.groupBy { top(it.categoryId) }
+        return txns.filter { it.amountMinor < 0 && !it.excluded }.groupBy { top(it.categoryId) }
             .mapValues { (_, l) -> l.sumOf { -it.amountMinor } }
     }
 
@@ -106,5 +105,38 @@ object Insights {
             bal -= perDay[d.toString()] ?: 0L
         }
         return out.reversed()
+    }
+
+    /** Spend (positive) for each month, oldest first. Internal transfers and excluded items are ignored. */
+    fun monthlySpend(txns: List<TxnEntity>, months: List<YearMonth>): List<Long> {
+        val spend = txns.filter { it.amountMinor < 0 && it.transferId == null && !it.excluded }
+            .groupBy { it.bookingDate.take(7) }
+            .mapValues { (_, l) -> l.sumOf { -it.amountMinor } }
+        return months.map { spend[it.toString()] ?: 0L }
+    }
+
+    data class MerchantTotal(val name: String, val spent: Long, val count: Int, val topCategory: Long?)
+
+    /** Spend per displayed merchant name, biggest first. */
+    fun merchants(txns: List<TxnEntity>): List<MerchantTotal> =
+        txns.filter { it.transferId == null && !it.excluded }
+            .groupBy { Suggest.title(it) }
+            .map { (name, l) ->
+                MerchantTotal(
+                    name, l.filter { it.amountMinor < 0 }.sumOf { -it.amountMinor }, l.size,
+                    l.mapNotNull { it.categoryId }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key,
+                )
+            }
+            .sortedByDescending { it.spent }
+
+    data class Change(val categoryId: Long?, val now: Long, val before: Long) { val delta get() = now - before }
+
+    /** Biggest category swings between two sets of transactions, largest absolute change first. */
+    fun changes(now: List<TxnEntity>, before: List<TxnEntity>, cats: List<CategoryEntity>, n: Int = 3): List<Change> {
+        val a = spendByTopCategory(now, cats)
+        val b = spendByTopCategory(before, cats)
+        return (a.keys + b.keys).map { Change(it, a[it] ?: 0L, b[it] ?: 0L) }
+            .filter { kotlin.math.abs(it.delta) >= 1000 }
+            .sortedByDescending { kotlin.math.abs(it.delta) }.take(n)
     }
 }

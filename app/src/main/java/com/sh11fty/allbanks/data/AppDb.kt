@@ -75,6 +75,19 @@ interface AppDao {
     @Query("DELETE FROM transactions")
     suspend fun deleteAllTxns()
 
+    // merchant aliases
+    @Query("SELECT * FROM merchant_aliases")
+    suspend fun aliasesOnce(): List<MerchantAlias>
+
+    @Upsert
+    suspend fun upsertAliases(items: List<MerchantAlias>)
+
+    @Query("DELETE FROM merchant_aliases WHERE rawKey IN (:keys)")
+    suspend fun deleteAliases(keys: List<String>)
+
+    @Query("DELETE FROM merchant_aliases")
+    suspend fun deleteAllAliases()
+
     // categories
     @Query("SELECT * FROM categories ORDER BY name")
     fun categories(): Flow<List<CategoryEntity>>
@@ -169,8 +182,9 @@ interface AppDao {
         RuleEntity::class,
         CandidateEntity::class,
         BudgetEntity::class,
+        MerchantAlias::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDb : RoomDatabase() {
@@ -187,11 +201,27 @@ abstract class AppDb : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN categorySource INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN ruleId INTEGER")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN displayName TEXT")
+                db.execSQL("ALTER TABLE categories ADD COLUMN icon TEXT")
+                db.execSQL("ALTER TABLE rules ADD COLUMN renameTo TEXT")
+                db.execSQL("ALTER TABLE rules ADD COLUMN excludeFromSpending INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE rules ADD COLUMN markReviewed INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("CREATE TABLE IF NOT EXISTS merchant_aliases (rawKey TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY(rawKey))")
+                db.execSQL("UPDATE transactions SET categorySource = 3 WHERE categoryManual = 1 AND categoryId IS NOT NULL")
+                db.execSQL("UPDATE transactions SET categorySource = 1 WHERE categoryManual = 0 AND categoryId IS NOT NULL")
+            }
+        }
+
         fun create(context: Context, passphrase: ByteArray): AppDb {
             System.loadLibrary("sqlcipher")
             return Room.databaseBuilder(context, AppDb::class.java, "allbanks.db")
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
         }
     }

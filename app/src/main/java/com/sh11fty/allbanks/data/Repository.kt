@@ -6,6 +6,7 @@ import com.sh11fty.allbanks.domain.DefaultCategories
 import com.sh11fty.allbanks.domain.Insights
 import com.sh11fty.allbanks.domain.Money
 import com.sh11fty.allbanks.domain.RuleEngine
+import com.sh11fty.allbanks.domain.Suggest
 import com.sh11fty.allbanks.domain.TransferMatcher
 import com.sh11fty.allbanks.net.EnduteApi
 import java.time.Duration
@@ -13,6 +14,14 @@ import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 import kotlin.math.abs
+
+/** What an action changed, so it can be reversed. */
+data class UndoSnapshot(
+    val label: String,
+    val before: List<TxnEntity>,
+    val createdRuleIds: List<Long> = emptyList(),
+    val aliasKeys: List<String> = emptyList(),
+)
 
 data class SyncSummary(
     val newTxns: Int,
@@ -97,6 +106,11 @@ class Repository(val db: AppDb, private val vault: Vault) {
                         categoryManual = prev?.categoryManual ?: false,
                         transferId = prev?.transferId,
                         note = prev?.note,
+                        reviewState = prev?.reviewState ?: 0,
+                        categorySource = prev?.categorySource ?: 0,
+                        ruleId = prev?.ruleId,
+                        excluded = prev?.excluded ?: false,
+                        displayName = prev?.displayName,
                     )
                 }
                 added += merged.count { it.id !in known }
@@ -111,13 +125,18 @@ class Repository(val db: AppDb, private val vault: Vault) {
         return SyncSummary(added, errors, warnings)
     }
 
-    /** Makes sure the built-in categories exist; returns them by lower-case name. */
+    /** Makes sure the built-in categories exist (with icons); returns them by lower-case name. */
     suspend fun ensureCategories(): Map<String, CategoryEntity> {
         val existing = dao.categoriesOnce().associateBy { it.name.lowercase() }.toMutableMap()
-        for ((name, colour) in DefaultCategories.all) {
-            if (name.lowercase() !in existing) {
-                val c = CategoryEntity(name = name, colour = colour)
-                existing[name.lowercase()] = c.copy(id = dao.insertCategory(c))
+        for (d in DefaultCategories.all) {
+            val have = existing[d.name.lowercase()]
+            if (have == null) {
+                val c = CategoryEntity(name = d.name, colour = d.colour, icon = d.icon)
+                existing[d.name.lowercase()] = c.copy(id = dao.insertCategory(c))
+            } else if (have.icon == null) {
+                val c = have.copy(icon = d.icon)
+                dao.upsertCategories(listOf(c))
+                existing[d.name.lowercase()] = c
             }
         }
         return existing
@@ -150,23 +169,44 @@ class Repository(val db: AppDb, private val vault: Vault) {
         }
     }
 
-    /** Rule match first, then Endute's own category mapped onto the built-in set. Manual choices are never touched. */
+    /**
+     * Applies rules, merchant renames and the bank's own label. Each rule action comes from the
+     * highest-priority rule that sets it. Categories you chose yourself are never changed.
+     */
     suspend fun categorise(all: Boolean) {
         val rules = dao.rulesOnce()
         val defaults = ensureCategories()
+        val aliases = dao.aliasesOnce().associate { it.rawKey to it.name }
         val every = dao.transactionsOnce()
         val counterpart = RuleEngine.counterparts(every)
-        val txns = every.filter { !it.categoryManual && (all || it.categoryId == null) }
-        db.withTransaction {
-            for (t in txns) {
-                var target = RuleEngine.firstMatch(rules, t, counterpart[t.id])?.categoryId
-                if (target == null && !t.providerCategory.isNullOrBlank()) {
-                    val name = DefaultCategories.map(t.providerCategory) ?: DefaultCategories.OTHER
-                    target = defaults[name.lowercase()]?.id
+        val changed = ArrayList<TxnEntity>()
+        for (t in every) {
+            var n = t
+            if (n.displayName == null) aliases[Suggest.merchantKey(n)]?.let { n = n.copy(displayName = it) }
+            if (all || t.categoryId == null) {
+                val out = RuleEngine.resolve(rules, n, counterpart[n.id])
+                out.renameTo?.let { if (n.displayName != it) n = n.copy(displayName = it) }
+                if (out.exclude && !n.excluded) n = n.copy(excluded = true)
+                if (out.markReviewed && n.reviewState == 0) n = n.copy(reviewState = 2)
+                if (!n.categoryManual) {
+                    var target: Long? = null
+                    var source = 0
+                    var ruleId: Long? = null
+                    if (out.categoryRule != null) {
+                        target = out.categoryRule.categoryId; source = 2; ruleId = out.categoryRule.id
+                    } else if (!n.providerCategory.isNullOrBlank()) {
+                        val name = DefaultCategories.map(n.providerCategory) ?: DefaultCategories.OTHER
+                        target = defaults[name.lowercase()]?.id
+                        source = if (target != null) 1 else 0
+                    }
+                    if (target != n.categoryId || source != n.categorySource || ruleId != n.ruleId) {
+                        n = n.copy(categoryId = target, categorySource = source, ruleId = ruleId)
+                    }
                 }
-                if (target != t.categoryId) dao.setAutoCategory(t.id, target)
             }
+            if (n != t) changed += n
         }
+        if (changed.isNotEmpty()) db.withTransaction { dao.upsertTxns(changed) }
     }
 
     suspend fun matchTransfers() {
@@ -208,27 +248,81 @@ class Repository(val db: AppDb, private val vault: Vault) {
         }
     }
 
-    suspend fun categoriseOne(t: TxnEntity, categoryId: Long?, rulePattern: String?) {
-        dao.setCategory(t.id, categoryId, manual = true)
-        if (t.reviewState != 0) dao.setReviewState(t.id, 0)
-        if (categoryId != null && !rulePattern.isNullOrBlank()) {
-            val field = when {
-                rulePattern == t.merchantName -> "merchant"
-                rulePattern == t.counterparty -> "counterparty"
-                else -> "description"
+    /** A "remember this" rule requested alongside a categorisation. */
+    data class RuleDraft(val field: String, val pattern: String)
+
+    /**
+     * Saves everything from the transaction sheet in one step: the category (for this and any look-alike
+     * transactions you ticked), an optional rule, exclude-from-spending and the note.
+     */
+    suspend fun saveEdit(
+        t: TxnEntity,
+        categoryId: Long?,
+        similar: List<TxnEntity>,
+        rule: RuleDraft?,
+        exclude: Boolean,
+        note: String,
+        label: String,
+    ): UndoSnapshot {
+        val targets = listOf(t) + similar
+        val before = dao.txnsByIds(targets.map { it.id })
+        val cleanNote = note.trim().ifEmpty { null }
+        val updated = before.map { s0 ->
+            var n = s0
+            if (categoryId != null) {
+                n = n.copy(categoryId = categoryId, categoryManual = true, categorySource = 3, ruleId = null, reviewState = 0)
             }
-            val top = dao.rulesOnce().minOfOrNull { it.priority } ?: 0
-            dao.upsertRule(
-                RuleEntity(
-                    priority = top - 1,
-                    field = field,
-                    matchType = "contains",
-                    pattern = rulePattern.trim(),
-                    categoryId = categoryId,
-                )
-            )
-            categorise(all = true)
+            if (s0.id == t.id) n = n.copy(excluded = exclude, note = cleanNote)
+            n
         }
+        var createdRule: Long? = null
+        db.withTransaction {
+            dao.upsertTxns(updated)
+            if (categoryId != null && rule != null && rule.pattern.isNotBlank()) {
+                val top = dao.rulesOnce().minOfOrNull { it.priority } ?: 0
+                createdRule = dao.upsertRule(
+                    RuleEntity(priority = top - 1, field = rule.field, matchType = "contains", pattern = rule.pattern.trim(), categoryId = categoryId)
+                )
+            }
+        }
+        if (createdRule != null) categorise(all = true)
+        return UndoSnapshot(label, before, listOfNotNull(createdRule))
+    }
+
+    /** Applies [change] to the given transactions and returns what is needed to undo it. */
+    suspend fun mutate(ids: List<String>, label: String, change: (TxnEntity) -> TxnEntity): UndoSnapshot {
+        val before = ids.chunked(500).flatMap { dao.txnsByIds(it) }
+        dao.upsertTxns(before.map(change))
+        return UndoSnapshot(label, before)
+    }
+
+    suspend fun undo(u: UndoSnapshot) {
+        db.withTransaction {
+            dao.upsertTxns(u.before)
+            u.createdRuleIds.forEach { dao.deleteRule(it) }
+            if (u.aliasKeys.isNotEmpty()) dao.deleteAliases(u.aliasKeys)
+        }
+        if (u.createdRuleIds.isNotEmpty()) categorise(all = true)
+    }
+
+    /** Renames (or merges into an existing name) every merchant currently shown as [oldName]. */
+    suspend fun renameMerchant(oldName: String, newName: String): UndoSnapshot {
+        val clean = newName.trim()
+        val all = dao.transactionsOnce()
+        val group = all.filter { Suggest.title(it) == oldName }
+        val keys = group.map { Suggest.merchantKey(it) }.filter { it.isNotEmpty() }.distinct()
+        val before = group
+        db.withTransaction {
+            dao.upsertTxns(group.map { it.copy(displayName = clean) })
+            dao.upsertAliases(keys.map { MerchantAlias(it, clean) })
+        }
+        return UndoSnapshot("Renamed \"$oldName\" to \"$clean\"", before, aliasKeys = keys)
+    }
+
+    /** Saves a rule; optionally re-runs the rules over history straight away. */
+    suspend fun saveRule(rule: RuleEntity, applyToPast: Boolean) {
+        dao.upsertRule(rule)
+        if (applyToPast) categorise(all = true)
     }
 
     suspend fun newCategory(name: String, parentId: Long? = null): Long {
@@ -269,7 +363,7 @@ class Repository(val db: AppDb, private val vault: Vault) {
         val included = dao.accountsOnce().filter { it.included }.map { it.id }.toSet()
         val month = LocalDate.now().toString().substring(0, 7)
         val txns = dao.transactionsOnce().filter {
-            it.bookingDate.startsWith(month) && it.transferId == null && it.accountId in included && it.amountMinor < 0
+            it.bookingDate.startsWith(month) && it.transferId == null && it.accountId in included && it.amountMinor < 0 && !it.excluded
         }
         return budgets.mapNotNull { b ->
             val ids = Insights.withChildren(b.categoryId, cats)
