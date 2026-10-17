@@ -75,6 +75,12 @@ interface AppDao {
     @Query("DELETE FROM transactions")
     suspend fun deleteAllTxns()
 
+    @Query("DELETE FROM transactions WHERE bookingDate < :start")
+    suspend fun deleteTxnsBefore(start: String)
+
+    @Query("DELETE FROM candidates WHERE outId NOT IN (SELECT id FROM transactions) OR inId NOT IN (SELECT id FROM transactions)")
+    suspend fun deleteOrphanCandidates()
+
     // merchant aliases
     @Query("SELECT * FROM merchant_aliases")
     suspend fun aliasesOnce(): List<MerchantAlias>

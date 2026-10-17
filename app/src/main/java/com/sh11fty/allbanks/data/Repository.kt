@@ -41,6 +41,19 @@ fun daysUntil(iso: String?): Long? = try {
 class Repository(val db: AppDb, private val vault: Vault) {
     private val dao get() = db.dao()
 
+    companion object {
+        /** The app tracks money from this date onwards; anything earlier is ignored. */
+        const val START_DATE = "2026-09-01"
+    }
+
+    /** Removes anything booked before [START_DATE] (old imports, restored backups). */
+    suspend fun purgeBeforeStart() {
+        db.withTransaction {
+            dao.deleteTxnsBefore(START_DATE)
+            dao.deleteOrphanCandidates()
+        }
+    }
+
     suspend fun sync(): SyncSummary {
         val key = vault.apiKey ?: throw IllegalStateException("Add your Endute API key in Settings first")
         val api = EnduteApi(key)
@@ -81,8 +94,9 @@ class Repository(val db: AppDb, private val vault: Vault) {
             }
 
             try {
-                val from = dao.latestBooking(a.id)?.let { LocalDate.parse(it).minusDays(7).toString() }
-                val dtos = api.transactions(a.id, from)
+                val latest = dao.latestBooking(a.id)?.let { LocalDate.parse(it).minusDays(7).toString() }
+                val from = if (latest != null && latest > START_DATE) latest else START_DATE
+                val dtos = api.transactions(a.id, from).filter { it.bookingDate >= START_DATE }
                 val known = HashMap<String, TxnEntity>()
                 dtos.map { it.id }.chunked(500).forEach { ids ->
                     dao.txnsByIds(ids).forEach { known[it.id] = it }
@@ -120,6 +134,7 @@ class Repository(val db: AppDb, private val vault: Vault) {
             }
         }
 
+        purgeBeforeStart()
         categorise(all = false)
         matchTransfers()
         return SyncSummary(added, errors, warnings)

@@ -69,7 +69,7 @@ object Backup {
             d.upsertRules(b.rules)
             d.upsertBudgets(b.budgets)
             d.upsertAliases(b.aliases)
-            d.upsertTxns(b.transactions)
+            d.upsertTxns(b.transactions.filter { it.bookingDate >= Repository.START_DATE })
         }
     }
 }

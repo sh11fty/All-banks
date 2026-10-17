@@ -80,6 +80,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
 
     init {
         run {
+            repo.purgeBeforeStart()
             if (!ab.prefs.getBoolean("catsV2", false)) {
                 repo.migrateLegacyCategories()
                 ab.prefs.edit().putBoolean("catsV2", true).apply()
