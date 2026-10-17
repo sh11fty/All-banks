@@ -20,6 +20,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -37,6 +45,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -87,10 +96,9 @@ import kotlin.math.abs
 /** True when balances should be masked. */
 val LocalHide = compositionLocalOf { false }
 
-fun fmt(minor: Long, currency: String = "GBP"): String {
-    val f = NumberFormat.getCurrencyInstance(Locale.UK)
-    runCatching { f.currency = Currency.getInstance(currency) }
-    return f.format(minor / 100.0)
+fun fmt(minor: Long, @Suppress("UNUSED_PARAMETER") currency: String = "GBP"): String {
+    // Every account is in GBP, so amounts are always shown in pounds.
+    return NumberFormat.getCurrencyInstance(Locale.UK).format(minor / 100.0)
 }
 
 @Composable
@@ -214,22 +222,34 @@ fun EmptyState(title: String, body: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** Filled pill search field. */
+/** Compact filled pill search field (44dp). */
 @Composable
 fun SearchField(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier) {
-    TextField(
+    androidx.compose.foundation.text.BasicTextField(
         value = value, onValueChange = onChange, singleLine = true,
-        placeholder = { Text(hint, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-        shape = RoundedCornerShape(50),
-        colors = TextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            focusedIndicatorColor = Color.Transparent,
-            unfocusedIndicatorColor = Color.Transparent,
-            disabledIndicatorColor = Color.Transparent,
-        ),
-        modifier = modifier.fillMaxWidth(),
+        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+        modifier = modifier.fillMaxWidth().height(Dimens.ControlHeight.dp),
+        decorationBox = { inner ->
+            Row(
+                Modifier.fillMaxSize().clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Search, null, Modifier.size(Dimens.IconSm.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(8.dp))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) Text(hint, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    inner()
+                }
+                if (value.isNotEmpty()) {
+                    Icon(
+                        Icons.Filled.Close, "Clear search",
+                        Modifier.size(Dimens.IconSm.dp).clickable { onChange("") },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
     )
 }
 
@@ -253,8 +273,6 @@ fun TxnDetails(t: TxnEntity, account: AccountEntity?, category: String?) {
         LabelValue("Booked", t.bookingDate)
         if (t.valueDate != null && t.valueDate != t.bookingDate) LabelValue("Value date", t.valueDate)
         LabelValue("Bank", account?.let { accountLabel(it) })
-        LabelValue("Category", category)
-        LabelValue("Bank says", t.providerCategory)
         LabelValue("Reference", t.endToEndId)
         LabelValue("Note", t.note)
     }
@@ -357,7 +375,7 @@ fun Color.toArgbInt(): Int = android.graphics.Color.argb(
     (alpha * 255).toInt(), (red * 255).toInt(), (green * 255).toInt(), (blue * 255).toInt()
 )
 
-/** Compact filter chip that opens a menu: options are (value, label); null value = "all". */
+/** Filter chip that opens a menu. When a value is chosen it shows that value with a ✕ to clear it. */
 @Composable
 fun <T> FilterMenu(
     title: String,
@@ -371,7 +389,10 @@ fun <T> FilterMenu(
         FilterChip(
             selected = selected != null,
             onClick = { open = true },
-            label = { Text(if (selected == null) "$title ▾" else "$label ▾", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            label = { Text(if (selected == null) "$title ▾" else label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            trailingIcon = if (selected != null) {
+                { Icon(Icons.Filled.Close, "Clear $title filter", Modifier.size(16.dp).clickable { onSelect(null) }) }
+            } else null,
         )
         DropdownMenu(open, { open = false }) {
             options.forEach { (v, l) ->
@@ -379,6 +400,15 @@ fun <T> FilterMenu(
             }
         }
     }
+}
+
+/** A toggle chip that shows a ✕ while active so it is obvious how to remove it. */
+@Composable
+fun ToggleFilter(label: String, active: Boolean, onToggle: () -> Unit) {
+    FilterChip(
+        selected = active, onClick = onToggle, label = { Text(label, maxLines = 1) },
+        trailingIcon = if (active) { { Icon(Icons.Filled.Close, "Remove $label filter", Modifier.size(16.dp)) } } else null,
+    )
 }
 
 // ---------------------------------------------------------------- transaction list
@@ -398,6 +428,7 @@ fun TxnRow(
         account?.institution?.takeIf { showBank },
         when {
             t.transferId != null -> "Internal transfer"
+            cat != null && t.amountMinor > 0 && !cat.name.equals("Income", ignoreCase = true) -> "Refund · ${cat.name}"
             cat != null -> cat.name
             else -> "Uncategorised"
         },
@@ -563,4 +594,115 @@ fun LineChart(values: List<Long>, modifier: Modifier = Modifier, colour: Color =
         drawPath(area, fill)
         drawPath(line, colour, style = Stroke(width = 4f, cap = StrokeCap.Round))
     }
+}
+
+// ---------------------------------------------------------------- shared building blocks
+
+/** One surface holding several rows, separated by inset hairlines. Use instead of a card per row. */
+@Composable
+fun ListGroup(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Card(modifier.fillMaxWidth()) { Column(content = content) }
+}
+
+@Composable
+fun Hairline(inset: Int = 16) {
+    HorizontalDivider(Modifier.padding(start = inset.dp, end = 16.dp), thickness = Dimens.Hairline.dp, color = MaterialTheme.colorScheme.outlineVariant)
+}
+
+enum class BannerKind { Info, Warning, Error }
+
+/** Inline status message used for connection warnings, errors and notices. */
+@Composable
+fun StatusBanner(title: String, body: String? = null, kind: BannerKind = BannerKind.Warning, modifier: Modifier = Modifier) {
+    val (bg, fg) = when (kind) {
+        BannerKind.Error -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+        BannerKind.Warning -> Semantic.warningContainer() to Semantic.onWarningContainer()
+        BannerKind.Info -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    Row(
+        modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).background(bg).padding(12.dp)
+            .semantics(mergeDescendants = true) { contentDescription = listOfNotNull(title, body).joinToString(". ") },
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(Icons.Filled.Warning, null, Modifier.size(Dimens.IconSm.dp + 2.dp), tint = fg)
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = fg)
+            if (body != null) Text(body, style = MaterialTheme.typography.bodySmall, color = fg)
+        }
+    }
+}
+
+/** Thin indeterminate bar for background work such as syncing. */
+@Composable
+fun LoadingBar(visible: Boolean) {
+    if (visible) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
+    else Spacer(Modifier.height(2.dp))
+}
+
+@Composable
+fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    androidx.compose.material3.Button(
+        onClick = onClick, modifier = modifier.heightIn(min = Dimens.ButtonHeight.dp), enabled = enabled,
+    ) { Text(text) }
+}
+
+@Composable
+fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    androidx.compose.material3.OutlinedButton(
+        onClick = onClick, modifier = modifier.heightIn(min = Dimens.ButtonHeight.dp), enabled = enabled,
+    ) { Text(text) }
+}
+
+@Composable
+fun DestructiveTextButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    TextButton(onClick = onClick, modifier = modifier) { Text(text, color = MaterialTheme.colorScheme.error) }
+}
+
+/** Icon-only action with a 48dp touch target and a spoken description. */
+@Composable
+fun IconAction(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit, modifier: Modifier = Modifier, tint: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    androidx.compose.material3.IconButton(onClick = onClick, modifier = modifier) { Icon(icon, description, tint = tint) }
+}
+
+/** Standard content column for bottom sheets: scrolls, and stays clear of the keyboard and system bars. */
+@Composable
+fun SheetColumn(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.imePadding().navigationBarsPadding().verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp).padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        content = content,
+    )
+}
+
+/** Collapsible group inside a sheet: title, a one-line summary of its current state, and the controls when open. */
+@Composable
+fun OptionGroup(title: String, summary: String, startOpen: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
+    var open by remember { mutableStateOf(startOpen) }
+    Column(
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().clickable { open = !open }.heightIn(min = Dimens.MinTouch.dp).padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Text(if (open) "▴" else "▾", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (open) Column(Modifier.padding(horizontal = 14.dp).padding(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+    }
+}
+
+/** Amount text with a leading sign for money in, so direction never relies on colour alone. */
+@Composable
+fun AmountText(minor: Long, modifier: Modifier = Modifier, style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.titleSmall, signed: Boolean = true) {
+    Text(
+        (if (signed && minor > 0) "+" else "") + fmt(minor), modifier = modifier, style = style,
+        color = if (signed && minor > 0) positiveColour() else MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+    )
 }

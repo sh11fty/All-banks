@@ -2,7 +2,10 @@
 
 package com.sh11fty.allbanks.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -13,19 +16,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -40,9 +41,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sh11fty.allbanks.data.AccountEntity
@@ -64,15 +65,16 @@ internal fun rememberOtherId(cats: List<CategoryEntity>): Long? =
 private fun sourceText(t: TxnEntity, rules: List<RuleEntity>): String = when (t.categorySource) {
     3 -> "You chose this category"
     2 -> rules.firstOrNull { it.id == t.ruleId }?.let { "Set by your rule \"${it.pattern}\"" } ?: "Set by a rule"
-    1 -> "From your bank's label" + (t.providerCategory?.let { " (\"$it\")" } ?: "")
+    1 -> "Suggested from your bank's label"
     else -> "No category yet"
 }
 
 // ---------------------------------------------------------------- transaction sheet
 
 /**
- * Everything about one transaction: suggestions, category, look-alikes, "remember", exclude, note, details.
- * [onSaved] replaces plain dismissal so Review can move straight on to the next item.
+ * Merchant, amount, category and Save come first. Rules, similar transactions, exclusion, note and
+ * details sit in collapsible groups that each state what they will do. [onSaved] replaces plain
+ * dismissal so Review can move straight on to the next item.
  */
 @Composable
 fun TxnSheet(
@@ -106,7 +108,6 @@ fun TxnSheet(
     var applySimilar by remember(t.id) { mutableStateOf(true) }
     var learnRule by remember(t.id) { mutableStateOf(t.categorySource != 3) }
     var pattern by remember(t.id) { mutableStateOf(Suggest.ruleTarget(t).second) }
-    var details by remember(t.id) { mutableStateOf(startExpanded) }
 
     val similar = remember(t, txns, chosen) {
         Suggest.similar(t, txns) { !it.categoryManual && it.categoryId != chosen }
@@ -119,33 +120,37 @@ fun TxnSheet(
         }
     }
     val canSave = chosen != null || note != t.note.orEmpty() || exclude != t.excluded
+    val willSimilar = chosen != null && applySimilar && similar.isNotEmpty()
+    val willRule = chosen != null && learnRule && pattern.isNotBlank()
+    val consequences = listOfNotNull(
+        if (willSimilar) "updates ${similar.size} similar" else null,
+        if (willRule) "creates a rule for \"${pattern.trim()}\"" else null,
+    ).joinToString(" · ")
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(
-            Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
+        SheetColumn {
             if (progress != null) Text(progress, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(verticalAlignment = Alignment.CenterVertically) {
+
+            // 1. Merchant and amount
+            Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
                     Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
                         listOfNotNull(dayLabel(t.bookingDate), account?.let { accountLabel(it) }).joinToString(" · "),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Text(fmt(t.amountMinor, t.currency), style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.width(12.dp))
+                AmountText(t.amountMinor, style = MaterialTheme.typography.titleLarge)
             }
 
             if (t.transferId != null) {
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Linked as an internal transfer", Modifier.weight(1f))
-                        OutlinedButton(onClick = { vm.unlink(t); onDismiss() }) { Text("Unlink") }
-                    }
-                }
+                StatusBanner("Linked as an internal transfer", "It doesn't count as spending or income.", BannerKind.Info)
+                SecondaryButton("Unlink transfer", { vm.unlink(t); onDismiss() }, Modifier.fillMaxWidth())
             }
 
+            // 2. Category
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Category", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (suggestions.isNotEmpty()) {
@@ -164,85 +169,74 @@ fun TxnSheet(
                 Text(sourceText(t, rules), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
-            if (chosen != null && similar.isNotEmpty()) {
-                OutlinedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Also apply to ${similar.size} similar", style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    similar.take(3).joinToString(" · ") { "${Suggest.title(it)} ${dayLabel(it.bookingDate)}" } +
-                                        if (similar.size > 3) " · +${similar.size - 3} more" else "",
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            Switch(applySimilar, { applySimilar = it })
-                        }
-                    }
-                }
+            // 3. Save, with a plain statement of what it will do
+            if (consequences.isNotEmpty()) {
+                Text("Saving also $consequences.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-
-            if (chosen != null) {
-                OutlinedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Always do this", style = MaterialTheme.typography.titleSmall)
-                                Text("Categorise future matches automatically", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Switch(learnRule, { learnRule = it })
-                        }
-                        if (learnRule) {
-                            OutlinedTextField(
-                                pattern, { pattern = it }, label = { Text("When the text contains") },
-                                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                            )
-                            if (pattern.isNotBlank() && (pattern.trim().length < 4 || broad > 3)) {
-                                Text(
-                                    if (broad > 3) "Broad: this text appears in $broad different merchants." else "Very short text may match unrelated merchants.",
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Leave out of spending", style = MaterialTheme.typography.titleSmall)
-                    Text("For refunds and one-offs", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(exclude, { exclude = it })
-            }
-
-            OutlinedTextField(note, { note = it }, label = { Text("Note") }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 3)
-
-            TextButton(onClick = { details = !details }) { Text(if (details) "Hide details ▴" else "All details ▾") }
-            if (details) {
-                OutlinedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) { TxnDetails(t, account, t.categoryId?.let(catById::get)?.let { categoryPath(it, catById) }) }
-                }
-            }
-
-            Button(
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                enabled = canSave,
+            PrimaryButton(
+                saveLabel,
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    val draft = if (learnRule && chosen != null && pattern.isNotBlank()) Repository.RuleDraft(field, pattern) else null
+                    val draft = if (willRule) Repository.RuleDraft(field, pattern) else null
                     vm.saveTxn(t, chosen, if (applySimilar) similar else emptyList(), draft, exclude, note) { (onSaved ?: onDismiss)() }
                 },
-            ) { Text(saveLabel) }
+                modifier = Modifier.fillMaxWidth(), enabled = canSave,
+            )
+
+            // 4. Less common options
+            if (chosen != null && similar.isNotEmpty()) {
+                OptionGroup("Similar transactions", if (applySimilar) "${similar.size} will get the same category" else "Only this one") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Apply to ${similar.size} similar", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        Switch(applySimilar, { applySimilar = it })
+                    }
+                    Text(
+                        similar.take(4).joinToString("\n") { "${Suggest.title(it)} · ${dayLabel(it.bookingDate)} · ${fmt(it.amountMinor)}" } +
+                            if (similar.size > 4) "\n+${similar.size - 4} more" else "",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (chosen != null) {
+                OptionGroup("Automatic rule", if (learnRule) "On: \"${pattern.trim()}\" will be categorised automatically" else "Off") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Categorise future matches", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        Switch(learnRule, { learnRule = it })
+                    }
+                    if (learnRule) {
+                        OutlinedTextField(
+                            pattern, { pattern = it }, label = { Text("When the text contains") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (pattern.isNotBlank() && (pattern.trim().length < 4 || broad > 3)) {
+                            Text(
+                                if (broad > 3) "Broad: this text appears in $broad different merchants." else "Very short text may match unrelated merchants.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
+            OptionGroup("Leave out of spending", if (exclude) "Excluded from totals, budgets and charts" else "Counted normally") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Exclude (for refunds and one-offs)", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    Switch(exclude, { exclude = it })
+                }
+            }
+            OptionGroup("Note", note.ifBlank { "None" }) {
+                OutlinedTextField(note, { note = it }, label = { Text("Note") }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 3)
+            }
+            OptionGroup("All details", "Reference, dates, amount, bank", startOpen = startExpanded) {
+                TxnDetails(t, account, null)
+            }
 
             if (t.transferId == null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     if (t.reviewState == 0) {
-                        OutlinedButton(onClick = { vm.checkLater(t); (onSaved ?: onDismiss)() }, modifier = Modifier.weight(1f)) { Text("Check later") }
-                        OutlinedButton(onClick = { vm.dismissReview(t); (onSaved ?: onDismiss)() }, modifier = Modifier.weight(1f)) { Text("Leave as is") }
+                        SecondaryButton("Check later", { vm.checkLater(t); (onSaved ?: onDismiss)() }, Modifier.weight(1f))
+                        SecondaryButton("Leave as is", { vm.dismissReview(t); (onSaved ?: onDismiss)() }, Modifier.weight(1f))
                     } else {
-                        OutlinedButton(onClick = { vm.restoreReview(t); onDismiss() }, modifier = Modifier.weight(1f)) { Text("Move back to Review") }
+                        SecondaryButton("Move back to Review", { vm.restoreReview(t); onDismiss() }, Modifier.fillMaxWidth())
                     }
                 }
             }
@@ -264,29 +258,43 @@ fun BulkSheet(ts: List<TxnEntity>, vm: MainVm, onDismiss: () -> Unit, onDone: ()
     val (field, pattern) = Suggest.ruleTarget(ts.first())
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        SheetColumn {
             Text("Categorise ${ts.size} transactions", style = MaterialTheme.typography.titleLarge)
             CategoryPicker(cats, usage, chosen, onSelect = { chosen = it }, onCreate = { n -> vm.createCategory(n) { chosen = it } })
             if (sameMerchant) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Always categorise \"$pattern\" like this", style = MaterialTheme.typography.titleSmall)
-                    }
+                    Text("Always categorise \"$pattern\" like this", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                     Switch(rule, { rule = it })
                 }
             }
-            Button(
-                modifier = Modifier.fillMaxWidth().height(52.dp), enabled = chosen != null,
+            PrimaryButton(
+                "Apply to ${ts.size}",
                 onClick = {
                     vm.categoriseMany(ts, chosen!!, if (rule) Repository.RuleDraft(field, pattern) else null)
                     onDone()
                 },
-            ) { Text("Apply") }
+                modifier = Modifier.fillMaxWidth(), enabled = chosen != null,
+            )
         }
     }
 }
 
 // ---------------------------------------------------------------- review screen
+
+class ReviewActions(
+    val quick: (TxnEntity, Long) -> Unit = { _, _ -> },
+    val open: (String) -> Unit = {},
+    val link: (CandidateEntity) -> Unit = {},
+    val reject: (CandidateEntity) -> Unit = {},
+    val candidateLater: (CandidateEntity) -> Unit = {},
+    val candidateRestore: (CandidateEntity) -> Unit = {},
+    val restore: (TxnEntity) -> Unit = {},
+    val done: (TxnEntity) -> Unit = {},
+    val bulkCategorise: (List<TxnEntity>) -> Unit = {},
+    val exclude: (List<TxnEntity>) -> Unit = {},
+    val later: (List<TxnEntity>) -> Unit = {},
+    val markDone: (List<TxnEntity>) -> Unit = {},
+)
 
 @Composable
 fun ReviewScreen(vm: MainVm) {
@@ -294,70 +302,165 @@ fun ReviewScreen(vm: MainVm) {
     val txns by vm.txns.collectAsState()
     val accounts by vm.accounts.collectAsState()
     val cats by vm.categories.collectAsState()
-    val haptic = LocalHapticFeedback.current
     var editingId by remember { mutableStateOf<String?>(null) }
+    var bulk by remember { mutableStateOf<List<TxnEntity>?>(null) }
+    val otherId = rememberOtherId(cats)
+    val queueAll = remember(txns, otherId) { txns.filter { Suggest.isUnsorted(it, otherId) } }
+    val byTxn = remember(txns) { txns.associateBy { it.id } }
+
+    ReviewContent(
+        candidates, txns, accounts, cats,
+        ReviewActions(
+            quick = { t, c -> vm.quickCategorise(t, c) },
+            open = { editingId = it },
+            link = { vm.confirm(it) }, reject = { vm.reject(it) },
+            candidateLater = { vm.checkLater(it) }, candidateRestore = { vm.restoreCandidate(it) },
+            restore = { vm.restoreReview(it) }, done = { vm.dismissReview(it) },
+            bulkCategorise = { bulk = it },
+            exclude = { vm.setExcluded(it, true) },
+            later = { vm.setReviewState(it, 1) },
+            markDone = { vm.setReviewState(it, 2) },
+        ),
+    )
+
+    editingId?.let { id ->
+        val t = byTxn[id]
+        if (t == null) editingId = null else key(id) {
+            val pos = queueAll.indexOfFirst { it.id == id }
+            TxnSheet(
+                t, vm,
+                onDismiss = { editingId = null },
+                onSaved = if (pos >= 0) ({ editingId = queueAll.getOrNull(pos + 1)?.id }) else null,
+                saveLabel = if (pos >= 0 && pos < queueAll.lastIndex) "Save & next" else "Save",
+                progress = if (pos >= 0) "${pos + 1} of ${queueAll.size}" else null,
+                startExpanded = false,
+            )
+        }
+    }
+    bulk?.let { ts -> BulkSheet(ts, vm, onDismiss = { bulk = null }) { bulk = null } }
+}
+
+/** The review queue, free of the view-model so it can be rendered with any data. */
+@Composable
+fun ReviewContent(
+    candidates: List<CandidateEntity>,
+    txns: List<TxnEntity>,
+    accounts: List<AccountEntity>,
+    cats: List<CategoryEntity>,
+    actions: ReviewActions,
+) {
+    val haptic = LocalHapticFeedback.current
     var selected by remember { mutableStateOf(setOf<String>()) }
-    var bulk by remember { mutableStateOf(false) }
     var showLater by remember { mutableStateOf(false) }
     var visible by remember { mutableStateOf(25) }
+    var query by remember { mutableStateOf("") }
+    var bank by remember { mutableStateOf<String?>(null) }
+    var direction by remember { mutableStateOf<Int?>(null) }
 
     val otherId = rememberOtherId(cats)
     val byTxn = remember(txns) { txns.associateBy { it.id } }
     val acc = remember(accounts) { accounts.associateBy { it.id } }
     val catById = remember(cats) { cats.associateBy { it.id } }
     val index = remember(txns) { Suggest.index(txns) }
+    val institutions = remember(accounts) { accounts.map { it.institution }.distinct() }
+    val filtering = bank != null || direction != null || query.isNotBlank()
 
-    val pendingTransfers = candidates.filter { !it.later }
-    val laterTransfers = candidates.filter { it.later }
-    val queue = remember(txns, otherId) { txns.filter { Suggest.isUnsorted(it, otherId) } }
-    val laterTxns = remember(txns) { txns.filter { it.reviewState == 1 } }
+    fun textMatches(t: TxnEntity): Boolean =
+        query.isBlank() || listOfNotNull(t.description, t.counterparty, t.merchantName, t.displayName, "%.2f".format(kotlin.math.abs(t.amountMinor) / 100.0))
+            .any { it.contains(query, ignoreCase = true) }
+
+    fun matches(t: TxnEntity): Boolean =
+        (bank == null || acc[t.accountId]?.institution == bank) &&
+            (direction == null || (direction == 1 && t.amountMinor > 0) || (direction == -1 && t.amountMinor < 0)) &&
+            textMatches(t)
+
+    fun candidateMatches(c: CandidateEntity): Boolean {
+        val o = byTxn[c.outId] ?: return false
+        val i = byTxn[c.inId] ?: return false
+        return (bank == null || acc[o.accountId]?.institution == bank || acc[i.accountId]?.institution == bank) &&
+            (textMatches(o) || textMatches(i))
+    }
+
+    val pendingAll = candidates.filter { !it.later }
+    val laterAll = candidates.filter { it.later }
+    val queueAll = remember(txns, otherId) { txns.filter { Suggest.isUnsorted(it, otherId) } }
+    val pendingTransfers = pendingAll.filter(::candidateMatches)
+    val laterTransfers = laterAll.filter(::candidateMatches)
+    val queue = remember(queueAll, query, bank, direction) { queueAll.filter(::matches) }
+    val laterTxns = remember(txns, query, bank, direction) { txns.filter { it.reviewState == 1 }.filter(::matches) }
     val laterCount = laterTransfers.size + laterTxns.size
     val total = remember { mutableStateOf(0) }
-    if (queue.size > total.value) total.value = queue.size
-    val done = (total.value - queue.size).coerceAtLeast(0)
+    if (queueAll.size > total.value) total.value = queueAll.size
+    val done = (total.value - queueAll.size).coerceAtLeast(0)
 
     fun bankDefault(t: TxnEntity): Long? =
         DefaultCategories.map(t.providerCategory)?.let { n -> cats.firstOrNull { it.name.equals(n, true) && it.parentId == null }?.id }
 
     Column(Modifier.fillMaxSize()) {
         if (selected.isNotEmpty()) {
-            val chosenTxns = txns.filter { it.id in selected }
+            val chosen = txns.filter { it.id in selected }
             SelectionBar(
                 selected.size,
                 listOf(
-                    "Categorise" to { bulk = true },
-                    "Exclude" to { vm.setExcluded(chosenTxns, true); selected = emptySet() },
-                    "Later" to { vm.setReviewState(chosenTxns, 1); selected = emptySet() },
-                    "Done" to { vm.setReviewState(chosenTxns, 2); selected = emptySet() },
+                    "Categorise" to { actions.bulkCategorise(chosen); selected = emptySet() },
+                    "Exclude" to { actions.exclude(chosen); selected = emptySet() },
+                    "Later" to { actions.later(chosen); selected = emptySet() },
+                    "Done" to { actions.markDone(chosen); selected = emptySet() },
                 ),
                 onClear = { selected = emptySet() },
             )
         }
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Review", style = MaterialTheme.typography.headlineSmall)
-                    if (queue.isNotEmpty()) {
+                    if (queueAll.isNotEmpty()) {
                         LinearProgressIndicator(
                             progress = { if (total.value == 0) 0f else done.toFloat() / total.value },
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        Text("${queue.size} left to sort · tap a suggestion, or press and hold to select several", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(
+                        "${pendingAll.size} transfer${if (pendingAll.size == 1) "" else "s"} to confirm · ${queueAll.size} to categorise",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SearchField(query, { query = it }, "Filter by merchant or amount")
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        FilterMenu("Bank", listOf<Pair<String?, String>>(null to "All banks") + institutions.map { it to it }, bank) { bank = it }
+                        FilterMenu("Money", listOf<Pair<Int?, String>>(null to "In & out", 1 to "Money in", -1 to "Money out"), direction) { direction = it }
+                        if (filtering) TextButton(onClick = { bank = null; direction = null; query = "" }) { Text("Clear all") }
                     }
                 }
             }
 
-            if (pendingTransfers.isNotEmpty()) {
-                item { SectionHeader("Possible internal transfers · ${pendingTransfers.size}") }
+            // Section 1: suspected internal transfers
+            if (pendingTransfers.isNotEmpty() || !filtering) {
+                item {
+                    ReviewSectionHeader(
+                        "Possible internal transfers", pendingTransfers.size,
+                        "Money moving between your own accounts. Linking them keeps them out of spending and income.",
+                        tint = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+                if (pendingTransfers.isEmpty()) item { ListGroup { EmptyState("No transfers to confirm", "Matching pairs between your own accounts show up here.") } }
                 items(pendingTransfers, key = { "c" + it.outId + it.inId }) { c ->
-                    TransferCard(c, byTxn[c.outId], byTxn[c.inId], acc, catById, vm, later = false)
+                    TransferCard(c, byTxn[c.outId], byTxn[c.inId], acc, actions, later = false)
                 }
             }
 
-            item { SectionHeader("Needs a category · ${queue.size}") }
-            if (queue.isEmpty()) item { Card(Modifier.fillMaxWidth()) { EmptyState("All caught up", "Every transaction has a category.") } }
+            // Section 2: needs a category
+            item {
+                ReviewSectionHeader(
+                    "Needs a category", queue.size,
+                    "Tap a suggestion to file it. Press and hold to select several.",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (queue.isEmpty()) item {
+                ListGroup { EmptyState(if (filtering) "Nothing matches" else "All caught up", if (filtering) "Clear a filter to see the rest." else "Every transaction has a category.") }
+            }
             items(queue.take(visible), key = { "u" + it.id }) { t ->
-                Card(Modifier.fillMaxWidth()) {
+                ListGroup {
                     TxnRow(
                         t, acc[t.accountId], t.categoryId?.let(catById::get),
                         selected = t.id in selected,
@@ -365,60 +468,55 @@ fun ReviewScreen(vm: MainVm) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             selected = selected + t.id
                         },
-                    ) { if (selected.isNotEmpty()) selected = if (t.id in selected) selected - t.id else selected + t.id else editingId = t.id }
+                    ) { if (selected.isNotEmpty()) selected = if (t.id in selected) selected - t.id else selected + t.id else actions.open(t.id) }
                     if (selected.isEmpty()) {
                         val sug = Suggest.suggestions(t, index, bankDefault(t), 3).mapNotNull { catById[it] }.filter { it.id != otherId }
-                        FlowRow(Modifier.padding(start = 74.dp, end = 12.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(Modifier.padding(start = 70.dp, end = 12.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             sug.forEach { c ->
-                                AssistChip(onClick = { vm.quickCategorise(t, c.id) }, label = { Text("${c.icon.orEmpty()} ${c.name}".trim(), maxLines = 1) })
+                                AssistChip(onClick = { actions.quick(t, c.id) }, label = { Text("${c.icon.orEmpty()} ${c.name}".trim(), maxLines = 1) })
                             }
-                            AssistChip(onClick = { editingId = t.id }, label = { Text("More…") })
+                            AssistChip(onClick = { actions.open(t.id) }, label = { Text("More…") })
                         }
                     }
                 }
             }
             if (queue.size > visible) item { TextButton(onClick = { visible += 25 }) { Text("Show more (${queue.size - visible} left)") } }
 
+            // Section 3: parked items
             item {
                 TextButton(onClick = { showLater = !showLater }) {
                     Text((if (showLater) "▾ " else "▸ ") + "Check later ($laterCount)", style = MaterialTheme.typography.labelLarge)
                 }
             }
             if (showLater) {
-                if (laterCount == 0) item { Text("Nothing parked.", style = MaterialTheme.typography.bodyMedium) }
+                if (laterCount == 0) item { Text("Nothing parked.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 items(laterTransfers, key = { "lc" + it.outId + it.inId }) { c ->
-                    TransferCard(c, byTxn[c.outId], byTxn[c.inId], acc, catById, vm, later = true)
+                    TransferCard(c, byTxn[c.outId], byTxn[c.inId], acc, actions, later = true)
                 }
                 items(laterTxns, key = { "lu" + it.id }) { t ->
-                    Card(Modifier.fillMaxWidth()) {
-                        TxnRow(t, acc[t.accountId], t.categoryId?.let(catById::get)) { editingId = t.id }
-                        Row(Modifier.padding(start = 74.dp, end = 12.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AssistChip(onClick = { vm.restoreReview(t) }, label = { Text("Move back") })
-                            AssistChip(onClick = { vm.dismissReview(t) }, label = { Text("Done") })
+                    ListGroup {
+                        TxnRow(t, acc[t.accountId], t.categoryId?.let(catById::get)) { actions.open(t.id) }
+                        Row(Modifier.padding(start = 70.dp, end = 12.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AssistChip(onClick = { actions.restore(t) }, label = { Text("Move back") })
+                            AssistChip(onClick = { actions.done(t) }, label = { Text("Done") })
                         }
                     }
                 }
             }
         }
     }
+}
 
-    editingId?.let { id ->
-        val t = byTxn[id]
-        if (t == null) editingId = null else key(id) {
-            val pos = queue.indexOfFirst { it.id == id }
-            TxnSheet(
-                t, vm,
-                onDismiss = { editingId = null },
-                onSaved = if (pos >= 0) ({ editingId = queue.getOrNull(pos + 1)?.id }) else null,
-                saveLabel = if (pos >= 0 && pos < queue.lastIndex) "Save & next" else "Save",
-                progress = if (pos >= 0) "${pos + 1} of ${queue.size}" else null,
-                startExpanded = pos >= 0,
-            )
+@Composable
+private fun ReviewSectionHeader(title: String, count: Int, purpose: String, tint: androidx.compose.ui.graphics.Color) {
+    Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(3.dp).height(16.dp).clip(RoundedCornerShape(2.dp)).background(tint))
+            Spacer(Modifier.width(8.dp))
+            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+            Tag("$count")
         }
-    }
-    if (bulk) {
-        val ts = txns.filter { it.id in selected }
-        if (ts.isEmpty()) bulk = false else BulkSheet(ts, vm, onDismiss = { bulk = false }) { bulk = false; selected = emptySet() }
+        Text(purpose, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -428,26 +526,32 @@ private fun TransferCard(
     out: TxnEntity?,
     into: TxnEntity?,
     acc: Map<String, AccountEntity>,
-    catById: Map<Long, CategoryEntity>,
-    vm: MainVm,
+    actions: ReviewActions,
     later: Boolean,
 ) {
     if (out == null || into == null) return
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val from = acc[out.accountId]
+    val to = acc[into.accountId]
+    ListGroup {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(fmt(-out.amountMinor, out.currency), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                Text(fmt(-out.amountMinor), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 1)
                 Tag("${c.score}% match")
             }
-            Tag("Out", MaterialTheme.colorScheme.errorContainer)
-            TxnDetails(out, acc[out.accountId], out.categoryId?.let(catById::get)?.name)
-            Tag("In", MaterialTheme.colorScheme.primaryContainer)
-            TxnDetails(into, acc[into.accountId], into.categoryId?.let(catById::get)?.name)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.confirm(c) }) { Text("Link") }
-                OutlinedButton(onClick = { vm.reject(c) }) { Text("Not a transfer") }
-                if (later) OutlinedButton(onClick = { vm.restoreCandidate(c) }) { Text("Move back") }
-                else OutlinedButton(onClick = { vm.checkLater(c) }) { Text("Check later") }
+            Text(
+                "${from?.institution ?: "?"}  →  ${to?.institution ?: "?"}",
+                style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Hairline(0)
+            Text("Out of ${from?.let(::accountLabel) ?: "account"}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TxnDetails(out, from, null)
+            Text("Into ${to?.let(::accountLabel) ?: "account"}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TxnDetails(into, to, null)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                PrimaryButton("Link", { actions.link(c) })
+                SecondaryButton("Not a transfer", { actions.reject(c) })
+                if (later) SecondaryButton("Move back", { actions.candidateRestore(c) })
+                else SecondaryButton("Check later", { actions.candidateLater(c) })
             }
         }
     }

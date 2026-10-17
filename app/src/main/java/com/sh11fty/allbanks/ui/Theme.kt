@@ -40,8 +40,8 @@ object Space {
 }
 
 private val LightScheme = lightColorScheme(
-    primary = Color(0xFF0B6E5C), onPrimary = Color.White,
-    primaryContainer = Color(0xFFD6F5EC), onPrimaryContainer = Color(0xFF00382C),
+    primary = Color(0xFF14213D), onPrimary = Color.White,
+    primaryContainer = Color(0xFFD6F5EC), onPrimaryContainer = Color(0xFF083B30),
     secondary = Color(0xFF475569), onSecondary = Color.White,
     secondaryContainer = Color(0xFFE8ECF3), onSecondaryContainer = Color(0xFF1B2433),
     tertiary = Color(0xFF5B5BD6), onTertiary = Color.White,
@@ -97,12 +97,34 @@ private val AppTypography = Typography().let { d ->
 }
 
 private val AppShapes = Shapes(
-    extraSmall = RoundedCornerShape(12.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(20.dp),
-    extraLarge = RoundedCornerShape(28.dp),
+    extraSmall = RoundedCornerShape(10.dp),
+    small = RoundedCornerShape(10.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(24.dp),
 )
+
+/** Sizes shared by every screen so controls feel the same everywhere. */
+object Dimens {
+    const val Gutter = 16          // screen edge padding
+    const val SectionGap = 16      // vertical gap between sections
+    const val RowVertical = 12     // padding inside list rows
+    const val MinTouch = 48        // minimum interactive size
+    const val ControlHeight = 44   // search fields and compact controls
+    const val ButtonHeight = 48
+    const val AvatarRow = 40       // avatars in list rows
+    const val IconSm = 18
+    const val Hairline = 0.5f
+}
+
+/** Semantic status colours that stay readable on both themes. */
+object Semantic {
+    @Composable fun positive(): Color = if (isSystemInDarkTheme()) Color(0xFF4ADE9E) else Color(0xFF0A8F6A)
+    @Composable fun negative(): Color = MaterialTheme.colorScheme.error
+    @Composable fun warning(): Color = if (isSystemInDarkTheme()) Color(0xFFFBBF24) else Color(0xFFB45309)
+    @Composable fun warningContainer(): Color = if (isSystemInDarkTheme()) Color(0xFF3A2D0B) else Color(0xFFFEF3C7)
+    @Composable fun onWarningContainer(): Color = if (isSystemInDarkTheme()) Color(0xFFFDE68A) else Color(0xFF78350F)
+}
 
 @Composable
 fun AppTheme(content: @Composable () -> Unit) {
@@ -116,7 +138,7 @@ fun AppTheme(content: @Composable () -> Unit) {
 
 /** Positive money colour that stays readable in both themes. */
 @Composable
-fun positiveColour(): Color = if (isSystemInDarkTheme()) Color(0xFF4ADE9E) else Color(0xFF0A8F6A)
+fun positiveColour(): Color = Semantic.positive()
 
 /** Standard card: white (or raised ink) surface with a hairline border and generous radius. */
 @Composable
@@ -132,7 +154,7 @@ fun Card(
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
         ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = if (isSystemInDarkTheme()) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null,
         content = content,
     )
 }

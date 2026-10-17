@@ -125,6 +125,7 @@ fun MerchantsScreen(vm: MainVm) {
             Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         SearchField(query, { query = it }, "Search merchants", Modifier.padding(16.dp, 10.dp))
+        if (shown.isEmpty()) EmptyState("No merchants", if (query.isBlank()) "Merchants appear after your first sync." else "Nothing matches \"$query\".")
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), modifier = Modifier.weight(1f)) {
             items(shown, key = { it.name }) { m ->
                 Row(

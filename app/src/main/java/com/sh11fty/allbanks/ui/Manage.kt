@@ -5,6 +5,9 @@ package com.sh11fty.allbanks.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -55,11 +58,12 @@ import com.sh11fty.allbanks.domain.Insights
 import java.time.LocalDate
 
 @Composable
-fun SubScaffold(title: String, onBack: () -> Unit, content: @Composable () -> Unit) {
+fun SubScaffold(title: String, onBack: () -> Unit, actions: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-            Text(title, style = MaterialTheme.typography.titleLarge)
+        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconAction(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack, tint = MaterialTheme.colorScheme.onSurface)
+            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            actions()
         }
         Box(Modifier.weight(1f)) { content() }
     }
@@ -114,31 +118,41 @@ fun CategoriesScreen(vm: MainVm, onOpen: (Long) -> Unit) {
     val tops = cats.filter { it.parentId == null || cats.none { p -> p.id == it.parentId } }.sortedBy { it.name }
     val rows = tops.flatMap { t -> listOf(t to 0) + cats.filter { it.parentId == t.id }.sortedBy { it.name }.map { it to 1 } }
 
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    LazyColumn(contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Keep it simple: add a subcategory only when you want finer detail. Reports roll subcategories up into their parent.", fontSize = 12.sp)
-            Button(onClick = { addTop = true }, modifier = Modifier.padding(top = 8.dp)) { Text("Add category") }
+            Text(
+                "Add a subcategory only when you want finer detail. Charts and budgets roll subcategories up into their parent.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            PrimaryButton("Add category", { addTop = true })
         }
-        items(rows, key = { it.first.id }) { (c, depth) ->
-            var menu by remember { mutableStateOf(false) }
-            Card(Modifier.fillMaxWidth().padding(start = (depth * 24).dp).clickable { onOpen(c.id) }) {
-                Row(Modifier.padding(start = 12.dp, top = 6.dp, bottom = 6.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CategoryBadge(c, 40)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(c.name, fontWeight = FontWeight.Medium)
-                        Text("${usage[c.id] ?: 0} transactions", fontSize = 12.sp)
-                    }
-                    Box {
-                        TextButton(onClick = { menu = true }) { Text("⋮", fontSize = 20.sp) }
-                        DropdownMenu(menu, { menu = false }) {
-                            if (c.parentId == null) DropdownMenuItem(text = { Text("Add subcategory") }, onClick = { menu = false; addParent = c })
-                            DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; rename = c })
-                            DropdownMenuItem(text = { Text("Change icon") }, onClick = { menu = false; reicon = c })
-                            DropdownMenuItem(text = { Text("Change colour") }, onClick = { menu = false; recolour = c })
-                            DropdownMenuItem(text = { Text("Merge into… / delete") }, onClick = { menu = false; merge = c })
+        item {
+            ListGroup {
+                rows.forEachIndexed { i, (c, depth) ->
+                    var menu by remember { mutableStateOf(false) }
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onOpen(c.id) }.padding(start = (16 + depth * 28).dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CategoryBadge(c, if (depth == 0) 40 else 32)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(c.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${usage[c.id] ?: 0} transactions", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Box {
+                            IconAction(Icons.Filled.MoreVert, "Options for ${c.name}", { menu = true })
+                            DropdownMenu(menu, { menu = false }) {
+                                if (c.parentId == null) DropdownMenuItem(text = { Text("Add subcategory") }, onClick = { menu = false; addParent = c })
+                                DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; rename = c })
+                                DropdownMenuItem(text = { Text("Change icon") }, onClick = { menu = false; reicon = c })
+                                DropdownMenuItem(text = { Text("Change colour") }, onClick = { menu = false; recolour = c })
+                                DropdownMenuItem(text = { Text("Merge into… / delete") }, onClick = { menu = false; merge = c })
+                            }
                         }
                     }
+                    if (i < rows.lastIndex) Hairline(68)
                 }
             }
         }
@@ -212,8 +226,12 @@ fun BudgetProgress(name: String, spent: Long, limit: Long, colour: Int) {
     val over = target >= 1f
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Row {
-            Text(name, Modifier.weight(1f), fontWeight = FontWeight.Medium)
-            Text("${fmt(spent)} of ${fmt(limit)}", fontSize = 12.sp, color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+            Text(name, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                (if (over) "Over · " else "") + "${fmt(spent)} of ${fmt(limit)}",
+                style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         LinearProgressIndicator(
             progress = { frac.coerceAtMost(1f) },
@@ -239,16 +257,32 @@ fun BudgetsScreen(vm: MainVm) {
     }
     val usage = remember(txns) { txns.groupingBy { it.categoryId ?: -1L }.eachCount() }
 
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    LazyColumn(contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Monthly limits per category (subcategories count towards their parent). You get a notification at 90%.", fontSize = 12.sp)
-            Button(onClick = { adding = true }, modifier = Modifier.padding(top = 8.dp)) { Text("Add budget") }
+            Text(
+                "Monthly limits per category. Subcategories count towards their parent, and you get a notification at 90%.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            PrimaryButton("Add budget", { adding = true })
         }
-        items(budgets.sortedBy { catById[it.categoryId]?.name }, key = { it.categoryId }) { b ->
-            val cat = catById[b.categoryId] ?: return@items
-            val ids = Insights.withChildren(b.categoryId, cats)
-            val spent = thisMonth.filter { it.categoryId in ids }.sumOf { -it.amountMinor }
-            Column(Modifier.clickable { editing = b }) { BudgetProgress(categoryPath(cat, catById), spent, b.limitMinor, cat.colour) }
+        item {
+            if (budgets.isEmpty()) {
+                ListGroup { EmptyState("No budgets yet", "Set a monthly limit for a category to track it here.") }
+            } else {
+                ListGroup {
+                    val sorted = budgets.sortedBy { catById[it.categoryId]?.name }
+                    sorted.forEachIndexed { i, b ->
+                        val cat = catById[b.categoryId] ?: return@forEachIndexed
+                        val ids = Insights.withChildren(b.categoryId, cats)
+                        val spent = thisMonth.filter { it.categoryId in ids }.sumOf { -it.amountMinor }
+                        Column(Modifier.fillMaxWidth().clickable { editing = b }.padding(16.dp)) {
+                            BudgetProgress(categoryPath(cat, catById), spent, b.limitMinor, cat.colour)
+                        }
+                        if (i < sorted.lastIndex) Hairline()
+                    }
+                }
+            }
         }
     }
 
@@ -309,19 +343,32 @@ fun RecurringScreen(vm: MainVm) {
     val txns by vm.txns.collectAsState()
     val rec = remember(txns) { Insights.recurring(txns) }
     val monthly = rec.sumOf { it.monthlyMinor }
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Detected from repeated payments with a steady amount and interval. About ${fmt(monthly)} a month.", fontSize = 13.sp)
+            Text(
+                "Found from repeated payments with a steady amount and interval. About ${fmt(monthly)} a month.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        if (rec.isEmpty()) item { Text("Nothing detected yet. It needs at least three similar payments.", fontSize = 13.sp) }
-        items(rec, key = { it.key + it.currency }) { r ->
-            Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(r.title, fontWeight = FontWeight.Medium, maxLines = 1)
-                        Text("${every(r.everyDays)} · next ~${dayLabel(r.next.toString())} · seen ${r.count}×", fontSize = 12.sp)
+        item {
+            if (rec.isEmpty()) {
+                ListGroup { EmptyState("Nothing detected yet", "It needs at least three similar payments in a row.") }
+            } else {
+                ListGroup {
+                    rec.forEachIndexed { i, r ->
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(r.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    "${every(r.everyDays).replaceFirstChar { it.uppercase() }} · next ~${dayLabel(r.next.toString())} · seen ${r.count}×",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(fmt(r.amountMinor), style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                        }
+                        if (i < rec.lastIndex) Hairline()
                     }
-                    Text(fmt(r.amountMinor, r.currency), fontWeight = FontWeight.SemiBold)
                 }
             }
         }

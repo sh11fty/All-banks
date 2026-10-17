@@ -38,6 +38,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -90,8 +92,8 @@ fun RulesScreen(vm: MainVm) {
             )
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { adding = true }, enabled = cats.isNotEmpty()) { Text("New rule") }
-                OutlinedButton(onClick = { vm.reapplyRules() }) { Text("Re-apply to history") }
+                PrimaryButton("New rule", { adding = true }, enabled = cats.isNotEmpty())
+                SecondaryButton("Re-apply to history", { vm.reapplyRules() })
             }
         }
 
@@ -107,7 +109,7 @@ fun RulesScreen(vm: MainVm) {
                         )
                         Text("Make it automatic?", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { draftFrom = idea }) { Text("Review rule") }
+                            PrimaryButton("Review rule", { draftFrom = idea })
                             TextButton(onClick = { vm.dismissRuleIdea(idea.key) }) { Text("Not now") }
                         }
                     }
@@ -159,11 +161,11 @@ fun RulesScreen(vm: MainVm) {
                         )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { vm.moveRule(r, up = true) }) { Text("▲") }
-                        TextButton(onClick = { vm.moveRule(r, up = false) }) { Text("▼") }
+                        TextButton(onClick = { vm.moveRule(r, up = true) }, modifier = Modifier.semantics { contentDescription = "Move rule up" }) { Text("▲") }
+                        TextButton(onClick = { vm.moveRule(r, up = false) }, modifier = Modifier.semantics { contentDescription = "Move rule down" }) { Text("▼") }
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = { sheet = r }) { Text("Edit") }
-                        TextButton(onClick = { vm.deleteRule(r) }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                        DestructiveTextButton("Delete", { vm.deleteRule(r) })
                     }
                 }
             }
@@ -222,10 +224,7 @@ private fun RuleSheet(
     val distinctMerchants = remember(matched) { matched.map { Suggest.merchantKey(it) }.distinct().size }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(
-            Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
+        SheetColumn {
             Text(if (initial == null) "New rule" else "Edit rule", style = MaterialTheme.typography.titleLarge)
 
             SectionLabel("When")
@@ -319,12 +318,8 @@ private fun RuleSheet(
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("Cancel") }
-                Button(
-                    enabled = pattern.isNotBlank() && hasAction,
-                    modifier = Modifier.weight(1f),
-                    onClick = { vm.saveRule(draft(), applyPast); onDismiss() },
-                ) { Text("Save rule") }
+                SecondaryButton("Cancel", onDismiss, Modifier.weight(1f))
+                PrimaryButton("Save rule", { vm.saveRule(draft(), applyPast); onDismiss() }, Modifier.weight(1f), enabled = pattern.isNotBlank() && hasAction)
             }
         }
     }
