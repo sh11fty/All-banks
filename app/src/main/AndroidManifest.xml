@@ -25,6 +25,11 @@
         </activity>
 
         <provider
+            android:name=".bridge.DayframeBalanceProvider"
+            android:authorities="${applicationId}.dayframebalance"
+            android:exported="true" />
+
+        <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"
             android:exported="false"
