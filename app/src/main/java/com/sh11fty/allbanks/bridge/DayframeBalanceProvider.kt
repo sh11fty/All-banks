@@ -32,7 +32,7 @@ class DayframeBalanceProvider : ContentProvider() {
             val includeSavings = app.prefs.getBoolean("includeSavings", true)
             val eligible = accounts.filter { a ->
                 a.included && a.currency.equals("GBP", true) &&
-                    (includeSavings || !a.accountType.contains("saving", true))
+                    (includeSavings || a.accountType?.contains("saving", true) != true)
             }
             val total = eligible.mapNotNull { it.balanceMinor }.sum()
             Bundle().apply {
